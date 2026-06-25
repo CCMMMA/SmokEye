@@ -20,13 +20,31 @@ Unified method dispatch lives in `smokeye/cli.py`. Shared readers, allocation, s
 
 1. Read the selected pollutant band from the input GeoTIFF.
 2. Infer the target grid, CRS, resolution, terrain, and land-use from `GEO.DAT`.
-3. Read meteorological fields from CALMET/CMET binary records or from an optional `.npz`.
+3. Read meteorological fields from CALMET/CMET binary records or from an optional `.npz`, selecting the requested CALMET time record when multiple records are present.
 4. Build a fine-grid weight field on the target grid.
 5. Conservatively redistribute each source pixel to overlapping target cells.
 6. Optionally estimate a background pollutant value from station measurements.
 7. Optionally build and apply a station correction field.
 8. Optionally apply seamless/deblocking regularization to reduce coarse-pixel seams.
 9. Write a single-band GeoTIFF and optional diagnostics.
+
+## Temporal Model
+
+Each SmokEye command represents one pollutant analysis time or one pre-aggregated time window. The command does not infer a timestamp from the pollutant filename, station CSV name, or output path. The user is responsible for giving mutually consistent inputs:
+
+- the selected pollutant raster band should represent the target analysis time or averaging period;
+- CALMET/CMET meteorology should be selected for the same time or a scientifically justified representative period;
+- station measurements should be prefiltered or pre-aggregated to the same time basis before they are passed with `--groundtruth-csv`;
+- NPZ meteorology files are treated as already time-selected arrays on the `GEO.DAT` grid.
+
+For CALMET/CMET binary inputs, SmokEye reads all supported records for each meteorological field label and then chooses one array per field:
+
+- `--calmet-selector last` is the default and uses the last supported record for each field;
+- `--calmet-selector first` uses the first supported record for each field;
+- `--calmet-selector mean` uses the cellwise mean across all supported records for each field;
+- `--calmet-stamp INTEGER` overrides `--calmet-selector` and chooses the record whose CALMET integer timestamp is nearest to `INTEGER`.
+
+The CALMET timestamp is read from the 4-byte integer following the 8-byte field label in each supported gridded record. SmokEye treats this as an opaque CALMET-model timestamp; it does not convert it to UTC or local civil time. Record selection is performed independently for each meteorological field, so datasets with missing fields at some times should be inspected carefully.
 
 ## Shared Command-Line Contract
 

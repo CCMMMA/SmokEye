@@ -121,7 +121,49 @@ Supported `.npz` field names include:
 pblh, ws10, u10, v10, ustar, tempk, z0, elevation_calmet, landuse_calmet
 ```
 
-## 4. Inspect Ground Truth And Estimate Average Ground Level
+## 4. Understand Time Selection
+
+SmokEye treats each command as one analysis time or one pre-aggregated time window. It does not automatically synchronize inputs by parsing dates from filenames. Before running downscaling, decide what time basis the output should represent, then prepare all inputs consistently:
+
+- choose the pollutant raster band for that time or averaging period;
+- select or average CALMET meteorology for the same period;
+- prefilter or average station data to the same period before writing the ground-truth CSV;
+- use an `.npz` meteorology file only after its arrays have already been time-selected or time-averaged.
+
+For CALMET/CMET binary files, the time behavior is controlled by:
+
+```bash
+--calmet-selector last
+--calmet-selector first
+--calmet-selector mean
+--calmet-stamp INTEGER
+```
+
+The default is `--calmet-selector last`, which selects the last supported record for each meteorological variable. `first` selects the first supported record. `mean` computes a cellwise mean over all supported records for each variable and is useful when the pollutant raster is itself a temporal average. `--calmet-stamp` overrides the selector and chooses the record whose CALMET integer timestamp is nearest to the supplied value.
+
+For example, if the CALMET producer documents that stamp `2024062811` corresponds to the intended analysis hour, run:
+
+```bash
+python downscale_pollutant.py \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
+  data/cmet.dat \
+  data/geo.dat \
+  output/getting_started/no_groundtruth/deterministic_no2_stamp.tif \
+  --pollutant NO2 \
+  --input-band 1 \
+  --calmet-stamp 2024062811 \
+  --validate
+```
+
+If the pollutant raster represents a daily or multi-hour average and the CALMET file contains all matching records, use:
+
+```bash
+--calmet-selector mean
+```
+
+The CALMET stamp is treated as an opaque model integer. SmokEye does not convert it to UTC, local time, or a Python datetime. Station CSV rows also have no internal time axis in the current workflow, so temporal consistency is established before the CSV is passed to SmokEye.
+
+## 5. Inspect Ground Truth And Estimate Average Ground Level
 
 Ground-truth station data are optional. A station CSV must contain station ID, latitude, longitude, and a pollutant value column:
 
@@ -177,7 +219,7 @@ Alternative background estimators are available:
 
 Use `mean` or `median` when the station network is spatially representative. Use the default low-percentile mode when stations include localized source-influenced measurements and a background-excess correction is desired.
 
-## 5. Run Deterministic Downscaling Without Ground Truth Correction
+## 6. Run Deterministic Downscaling Without Ground Truth Correction
 
 This is the simplest full downscaling run. It uses deterministic dynamic weights, writes the main raster, writes the weight raster, and reports conservation metrics:
 
@@ -215,7 +257,7 @@ When default deblocking is enabled, validation is reported for two fields:
 
 The conservative allocation should generally have lower coarse-scale error because it is evaluated before smoothing.
 
-## 6. Run AI Downscaling Without Ground Truth Correction
+## 7. Run AI Downscaling Without Ground Truth Correction
 
 Use the same inputs and outputs, changing only `--method` and output paths:
 
@@ -239,7 +281,7 @@ AI weight model: features=... hidden=... training_cells=...
 
 The AI method is deterministic. Its random hidden layer uses a fixed seed, so repeated runs with the same inputs produce the same weight field.
 
-## 7. Run Deterministic Downscaling With Ground Truth Correction
+## 8. Run Deterministic Downscaling With Ground Truth Correction
 
 Ground-truth correction uses station observations to build a smooth multiplicative correction field. The correction modifies the dynamic weights, and the conservative allocation is then rerun.
 
@@ -294,7 +336,7 @@ corr
 
 Interpret these metrics as station agreement diagnostics, not as proof of physical truth. Station measurements are often near-surface observations, while satellite fields may represent column quantities or model-layer values.
 
-## 8. Run AI Downscaling With Ground Truth Correction
+## 9. Run AI Downscaling With Ground Truth Correction
 
 The AI run uses the same ground-truth correction workflow:
 
@@ -324,7 +366,7 @@ Use the deterministic and AI station reports to compare:
 - correction-field magnitude and spatial distribution;
 - conservation behavior before and after deblocking.
 
-## 9. Run With Default Deblocking
+## 10. Run With Default Deblocking
 
 By default, SmokEye applies two regularization steps to reduce visible coarse-pixel boundaries:
 
@@ -353,7 +395,7 @@ The default final deblocking settings are:
 
 Default deblocking improves visual continuity but relaxes strict per-source-pixel conservation in the final written raster. The `--validate` output makes this visible by reporting both exact conservative allocation and written regularized output.
 
-## 10. Run Without Deblocking For Strict Conservation Review
+## 11. Run Without Deblocking For Strict Conservation Review
 
 For strict scientific comparison of the conservative allocation stage, disable seamless recomposition and final deblocking:
 
@@ -429,7 +471,7 @@ python downscale_pollutant.py --method ai \
 
 The strict runs are useful for regression tests, method comparison, and conservation audits. The default deblocked runs are usually more suitable for visualization.
 
-## 11. Extract Quality Metrics From Station Reports
+## 12. Extract Quality Metrics From Station Reports
 
 Station reports are JSON files. The following Python snippet extracts station metrics, conservation metrics, and the estimated average ground-level background value:
 
@@ -551,7 +593,7 @@ PY
 
 The `background_value` column is the estimated average ground-level pollutant background from the station data. It is also printed during `--inspect-groundtruth` and during corrected downscaling runs.
 
-## 12. Compute Raster Summary Statistics
+## 13. Compute Raster Summary Statistics
 
 Quality control should include raster-level statistics in addition to station metrics. The following snippet summarizes each output raster:
 
@@ -588,7 +630,7 @@ PY
 
 These statistics are not a replacement for conservation validation, but they help detect obvious scale errors, nodata mistakes, extreme values, and unexpected shifts introduced by station correction or deblocking.
 
-## 13. Compare Deterministic And AI Outputs
+## 14. Compare Deterministic And AI Outputs
 
 Create AI-minus-deterministic difference rasters:
 
@@ -639,7 +681,7 @@ Recommended visual checks:
 - Does station correction create isolated artifacts around stations?
 - Are deterministic and AI differences systematic, localized, or noisy?
 
-## 14. Interpret Results Conservatively
+## 15. Interpret Results Conservatively
 
 SmokEye creates a model-assisted fine-grid allocation product. It does not create new satellite information at the `GEO.DAT` resolution.
 
@@ -662,7 +704,7 @@ When reporting results academically, state:
 - conservation metrics for conservative and written outputs;
 - known limitations, especially the difference between near-surface station measurements and satellite or model-layer quantities.
 
-## 15. Minimal Reproducible Command Matrix
+## 16. Minimal Reproducible Command Matrix
 
 The following table summarizes the core onboarding runs.
 

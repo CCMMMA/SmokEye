@@ -48,6 +48,36 @@ pblh, ws10, u10, v10, ustar, tempk, z0, elevation_calmet, landuse_calmet
 
 Each array must have shape `(ny, nx)` on the `GEO.DAT` grid. If `u10` and `v10` are present, `ws10` is derived automatically.
 
+#### Time Selection
+
+CALMET/CMET files may contain multiple gridded records for the same variable at different model timestamps. SmokEye reads supported records and selects one array per meteorological field.
+
+The default is:
+
+```bash
+--calmet-selector last
+```
+
+Available selector modes are:
+
+```bash
+--calmet-selector first
+--calmet-selector last
+--calmet-selector mean
+```
+
+Use `first` or `last` when the CALMET file has already been trimmed to a short period or when the desired record order is known. Use `mean` when the pollutant raster represents a time average and the meteorological influence should also be averaged over the available records.
+
+If the CALMET integer timestamp for the desired analysis time is known, select the nearest record with:
+
+```bash
+--calmet-stamp 2024062811
+```
+
+The integer is interpreted only as a CALMET record stamp. SmokEye does not parse it as a calendar date, does not infer time zones, and does not compare it with dates embedded in filenames.
+
+For `.npz` meteorology, there is no internal time selection. The arrays are assumed to have already been selected or averaged for the intended pollutant analysis time.
+
 ### `geodat`
 
 CALMET `GEO.DAT` file used to infer the target grid.
@@ -110,6 +140,8 @@ Column matching is case-insensitive. For pollutants other than `NO2`, either nam
 ```
 
 `PM25` also accepts `PM2.5` when present.
+
+Station CSV files do not carry a time axis in the SmokEye workflow. If source station data are hourly or sub-hourly, prepare the CSV before running SmokEye so each station row contains the measurement or average corresponding to the pollutant raster and selected CALMET period.
 
 ## Inspection Commands
 
