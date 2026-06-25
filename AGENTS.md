@@ -11,3 +11,4 @@
 - Update README and relevant files under `docs/` whenever behavior, layout, command options, outputs, or development workflow changes.
 - Preserve reproducibility for model-assisted paths; any stochastic component must use a deliberate fixed seed or expose a documented configuration.
 - Treat geospatial metadata, CRS handling, raster transforms, nodata values, and conservation validation as correctness-critical.
+- Enforce coarse-to-fine conservation as a hard scientific invariant: generated or regularized fine-grid outputs must aggregate back to the original coarse pollutant values unless an explicit, documented non-conservative diagnostic mode is requested.
