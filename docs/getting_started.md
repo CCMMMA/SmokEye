@@ -123,7 +123,7 @@ pblh, ws10, u10, v10, ustar, tempk, z0, elevation_calmet, landuse_calmet
 
 ## 4. Understand Time Selection
 
-SmokEye treats each command as one analysis time or one pre-aggregated time window. It does not automatically synchronize inputs by parsing dates from filenames. Before running downscaling, decide what time basis the output should represent, then prepare all inputs consistently:
+SmokEye treats each command as one analysis time or one pre-aggregated time window. Downscaling enforces timestamp consistency between the pollutant raster and CALMET/CMET meteorology. It uses explicit `--satellite-time-start/--satellite-time-end` values when supplied, otherwise it reads common GeoTIFF time metadata; it does not infer time from filenames. Before running downscaling, decide what time basis the output should represent, then prepare all inputs consistently:
 
 - choose the pollutant raster band for that time or averaging period;
 - select or average CALMET meteorology for the same period;
@@ -133,13 +133,12 @@ SmokEye treats each command as one analysis time or one pre-aggregated time wind
 For CALMET/CMET binary files, the time behavior is controlled by:
 
 ```bash
---calmet-selector last
---calmet-selector first
 --calmet-selector mean
 --calmet-stamp INTEGER
+--max-calmet-stamp-delta INTEGER
 ```
 
-The default is `--calmet-selector last`, which selects the last supported record for each meteorological variable. `first` selects the first supported record. `mean` computes a cellwise mean over all supported records for each variable and is useful when the pollutant raster is itself a temporal average. `--calmet-stamp` overrides the selector and chooses the record whose CALMET integer timestamp is nearest to the supplied value.
+When the pollutant raster has a known time window and `--calmet-stamp` is not supplied, SmokEye derives a target `YYYYMMDDHH` CALMET stamp from the satellite midpoint and chooses the closest available record for each meteorological variable. `--max-calmet-stamp-delta` limits how far the selected CALMET stamp may be from the requested stamp. `--calmet-stamp` overrides the derived stamp. `--calmet-selector mean` computes a cellwise mean over supported records and is useful only when the pollutant raster is itself a temporal average over the same period.
 
 For example, if the CALMET producer documents that stamp `2024062811` corresponds to the intended analysis hour, run:
 
@@ -161,7 +160,7 @@ If the pollutant raster represents a daily or multi-hour average and the CALMET 
 --calmet-selector mean
 ```
 
-The CALMET stamp is treated as an opaque model integer. SmokEye does not convert it to UTC, local time, or a Python datetime. Station CSV rows also have no internal time axis in the current workflow, so temporal consistency is established before the CSV is passed to SmokEye.
+Untimed pollutant rasters fail by default; use `--allow-untimed-satellite` only when the missing timestamp is an explicit, documented assumption. Station CSV rows also have no internal time axis in the current workflow, so temporal consistency is established before the CSV is passed to SmokEye.
 
 ## 5. Inspect Ground Truth And Estimate Average Ground Level
 

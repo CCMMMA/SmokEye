@@ -46,6 +46,8 @@ from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
 from scipy.ndimage import gaussian_filter
 
+from smokeye.temporal import discover_time_from_tags, expand_instant, iso, parse_datetime, validate_window
+
 
 @dataclass(frozen=True)
 class GeoGrid:
@@ -135,16 +137,17 @@ class RasterReference:
 
 
 class GeoDATReader:
-    def __init__(self, geodat: Path, sidecar: Optional[Path] = None):
+    def __init__(self, geodat: Path, sidecar: Optional[Path] = None, require_projection: bool = False):
         self.geodat = Path(geodat)
         self.sidecar = Path(sidecar) if sidecar else None
+        self.require_projection = require_projection
 
     def read(self) -> GeoGrid:
         if self.sidecar:
             return self._read_sidecar(self.sidecar)
         text = self.geodat.read_text(errors="ignore")
         lines = text.splitlines()
-        grid = self._infer_grid_from_header(lines)
+        grid = self._infer_grid_from_header(lines, require_projection=self.require_projection)
         landuse = self._read_landuse(lines, grid.nx, grid.ny)
         elevation = self._read_elevation(lines, grid.nx, grid.ny)
         return GeoGrid(
@@ -175,7 +178,7 @@ class GeoDATReader:
         )
 
     @staticmethod
-    def _infer_grid_from_header(lines: List[str]) -> GeoGrid:
+    def _infer_grid_from_header(lines: List[str], require_projection: bool = False) -> GeoGrid:
         # The CALMET GEO.DAT header commonly contains:
         #   UTM
         #    33N
@@ -235,6 +238,8 @@ class GeoDATReader:
             epsg = 32600 + zone if hemi == "N" else 32700 + zone
             crs = CRS.from_epsg(epsg)
         else:
+            if require_projection:
+                raise ValueError("Could not resolve GEO.DAT projection/zone; provide a GEO.DAT with explicit projection metadata")
             crs = CRS.from_epsg(32633)
 
         return GeoGrid(crs=crs, nx=nx, ny=ny, x0=x0, y0=y0, dx=dx, dy=dy)
@@ -298,6 +303,12 @@ class MetReader:
         self.selector = selector
         self.stamp = stamp
         self.allow_no_met = allow_no_met
+        self.selection_report: Dict[str, object] = {
+            "source": "none",
+            "selector": selector,
+            "requested_stamp": stamp,
+            "fields": {},
+        }
 
     def read(self) -> Dict[str, np.ndarray]:
         try:
@@ -326,18 +337,42 @@ class MetReader:
             met[name.lower()] = arr
         if "ws10" not in met and "u10" in met and "v10" in met:
             met["ws10"] = np.sqrt(met["u10"] ** 2 + met["v10"] ** 2)
+        self.selection_report = {
+            "source": "npz",
+            "selector": "preselected",
+            "requested_stamp": self.stamp,
+            "fields": {name: {"selection": "preselected", "stamp": None} for name in sorted(met.keys())},
+        }
         return met
 
-    def _select(self, records: List[Tuple[int, np.ndarray]]) -> Optional[np.ndarray]:
+    def _select(self, records: List[Tuple[int, np.ndarray]], field_name: str) -> Optional[np.ndarray]:
         if not records:
             return None
+        info = {
+            "available_stamps": [int(r[0]) for r in records],
+            "selector": self.selector,
+            "requested_stamp": self.stamp,
+            "selected_stamp": None,
+            "stamp_delta": None,
+        }
         if self.stamp is not None:
-            return min(records, key=lambda r: abs(r[0] - self.stamp))[1]
+            selected_stamp, arr = min(records, key=lambda r: (abs(r[0] - self.stamp), r[0]))
+            info.update({"selector": "closest", "selected_stamp": int(selected_stamp), "stamp_delta": int(abs(selected_stamp - self.stamp))})
+            self.selection_report["fields"][field_name] = info
+            return arr
         if self.selector == "first":
-            return records[0][1]
+            selected_stamp, arr = records[0]
+            info.update({"selected_stamp": int(selected_stamp), "stamp_delta": None})
+            self.selection_report["fields"][field_name] = info
+            return arr
         if self.selector == "mean":
+            info.update({"selected_stamp": "mean", "stamp_delta": None})
+            self.selection_report["fields"][field_name] = info
             return np.nanmean([r[1] for r in records], axis=0)
-        return records[-1][1]
+        selected_stamp, arr = records[-1]
+        info.update({"selected_stamp": int(selected_stamp), "stamp_delta": None})
+        self.selection_report["fields"][field_name] = info
+        return arr
 
     def _read_calmet(self, path: Path) -> Dict[str, np.ndarray]:
         nx, ny = self.grid.nx, self.grid.ny
@@ -377,6 +412,12 @@ class MetReader:
                 fields[label].append((stamp, arr))
 
         met: Dict[str, np.ndarray] = {}
+        self.selection_report = {
+            "source": str(path),
+            "selector": "closest" if self.stamp is not None else self.selector,
+            "requested_stamp": self.stamp,
+            "fields": {},
+        }
         direct = {
             "ZI": "pblh",
             "TEMPK": "tempk",
@@ -386,7 +427,7 @@ class MetReader:
             "ILANDU": "landuse_calmet",
         }
         for key, out_name in direct.items():
-            arr = self._select(fields.get(key, []))
+            arr = self._select(fields.get(key, []), out_name)
             if arr is not None:
                 met[out_name] = arr
 
@@ -398,8 +439,8 @@ class MetReader:
                     out.extend(records)
             return out
 
-        u = self._select(collect("U-LEV1") or fields.get("U-LEV  1", []))
-        v = self._select(collect("V-LEV1") or fields.get("V-LEV  1", []))
+        u = self._select(collect("U-LEV1") or fields.get("U-LEV  1", []), "u10")
+        v = self._select(collect("V-LEV1") or fields.get("V-LEV  1", []), "v10")
         if u is not None:
             met["u10"] = u
         if v is not None:
@@ -1111,6 +1152,36 @@ def write_weight_raster(path: Path, grid: GeoGrid, weights: np.ndarray) -> None:
         dst.set_band_description(1, "dynamic downscaling weight")
 
 
+def discover_raster_time(path: Path, band: int, instant_duration_minutes: Optional[float]) -> Tuple[Optional[object], Optional[object], str]:
+    with rasterio.open(path) as src:
+        if band < 1 or band > src.count:
+            raise ValueError(f"Input band {band} is outside available band range 1..{src.count}")
+        return discover_time_from_tags((src.tags(), src.tags(band)), instant_duration_minutes)
+
+
+def datetime_to_calmet_stamp(dt) -> int:
+    return int(dt.strftime("%Y%m%d%H"))
+
+
+def calmet_stamp_from_window(start, end) -> Optional[int]:
+    if start is None or end is None:
+        return None
+    midpoint = start + (end - start) / 2
+    return datetime_to_calmet_stamp(midpoint)
+
+
+def enforce_met_time_consistency(selection_report: dict, max_stamp_delta: Optional[int]) -> None:
+    if max_stamp_delta is None:
+        return
+    for field, info in selection_report.get("fields", {}).items():
+        delta = info.get("stamp_delta") if isinstance(info, dict) else None
+        if delta is not None and int(delta) > max_stamp_delta:
+            raise ValueError(
+                f"CALMET field {field} selected stamp {info.get('selected_stamp')} is delta {delta} from requested "
+                f"stamp {info.get('requested_stamp')}, exceeding --max-calmet-stamp-delta {max_stamp_delta}"
+            )
+
+
 WeightBuilder = Callable[[GeoGrid, Dict[str, np.ndarray]], np.ndarray]
 RasterTagBuilder = Callable[[dict], dict]
 MethodArgumentBuilder = Callable[[argparse.ArgumentParser], None]
@@ -1166,6 +1237,11 @@ def main(
     parser.add_argument("--write-correction", type=Path, default=None, help="Optional GeoTIFF of station multiplicative correction field.")
     parser.add_argument("--calmet-selector", choices=["first", "last", "mean"], default="last")
     parser.add_argument("--calmet-stamp", type=int, default=None, help="Select nearest CALMET integer timestamp.")
+    parser.add_argument("--satellite-time-start", default=None, help="Optional ISO timestamp for the pollutant raster validity-window start.")
+    parser.add_argument("--satellite-time-end", default=None, help="Optional ISO timestamp for the pollutant raster validity-window end.")
+    parser.add_argument("--satellite-instant-duration-minutes", type=float, default=None, help="Expand an instant pollutant raster timestamp into a centered validity window.")
+    parser.add_argument("--allow-untimed-satellite", action="store_true", help="Allow downscaling when the pollutant raster has no usable timestamp metadata and no time was supplied.")
+    parser.add_argument("--max-calmet-stamp-delta", type=int, default=1, help="Maximum allowed integer delta between requested and selected CALMET stamps when selecting closest weather data. Use a negative value to disable.")
     parser.add_argument("--allow-no-met", action="store_true", help="Continue with terrain/land-use weights if meteorology cannot be read.")
     parser.add_argument("--validate", action="store_true", help="Print coarse-scale conservation validation statistics.")
     parser.add_argument("--write-weight", type=Path, default=None, help="Optional output GeoTIFF for the final dynamic weight field.")
@@ -1227,15 +1303,35 @@ def main(
     if missing:
         parser.error("missing required positional arguments: " + ", ".join(missing))
 
+    sat_start = parse_datetime(args.satellite_time_start)
+    sat_end = parse_datetime(args.satellite_time_end)
+    satellite_time_source = "cli" if sat_start is not None or sat_end is not None else "missing"
+    if sat_start is None and sat_end is None:
+        sat_start, sat_end, satellite_time_source = discover_raster_time(args.input_tif, args.input_band, args.satellite_instant_duration_minutes)
+    else:
+        validate_window(sat_start, sat_end, "satellite time", allow_instant=True)
+        sat_start, sat_end = expand_instant(sat_start, sat_end, args.satellite_instant_duration_minutes)
+    if (sat_start is None or sat_end is None) and not args.allow_untimed_satellite:
+        parser.error("input pollutant raster has no usable timestamp; pass --satellite-time-start/--satellite-time-end or --allow-untimed-satellite")
+
+    effective_calmet_stamp = args.calmet_stamp
+    calmet_stamp_source = "cli" if effective_calmet_stamp is not None else "none"
+    if effective_calmet_stamp is None and sat_start is not None and sat_end is not None and args.calmet_selector != "mean":
+        effective_calmet_stamp = calmet_stamp_from_window(sat_start, sat_end)
+        calmet_stamp_source = "satellite_midpoint_YYYYMMDDHH"
+
     grid = GeoDATReader(args.geodat, args.geodat_sidecar).read()
-    met = MetReader(
+    met_reader = MetReader(
         args.calmet_dat,
         grid,
         met_npz=args.met_npz,
         selector=args.calmet_selector,
-        stamp=args.calmet_stamp,
+        stamp=effective_calmet_stamp,
         allow_no_met=args.allow_no_met,
-    ).read()
+    )
+    met = met_reader.read()
+    max_calmet_delta = None if args.max_calmet_stamp_delta < 0 else args.max_calmet_stamp_delta
+    enforce_met_time_consistency(met_reader.selection_report, max_calmet_delta)
     print("Inferred target grid:", json.dumps(grid.as_dict(), indent=2))
     print("Meteorology fields:", ", ".join(sorted(met.keys())) if met else "none")
 
@@ -1246,6 +1342,15 @@ def main(
         "method": method_name,
         "pollutant": args.pollutant,
         "input_band": args.input_band,
+        "time_consistency": {
+            "satellite_time_source": satellite_time_source,
+            "satellite_time_start": iso(sat_start),
+            "satellite_time_end": iso(sat_end),
+            "calmet_requested_stamp": effective_calmet_stamp,
+            "calmet_stamp_source": calmet_stamp_source,
+            "max_calmet_stamp_delta": max_calmet_delta,
+            "meteorology_selection": met_reader.selection_report,
+        },
         "groundtruth_used": False,
         "deblocking": {
             "sigma_m": args.deblock_sigma_m,
@@ -1339,11 +1444,21 @@ def main(
                 "groundtruth_value_column": args.groundtruth_value_column or args.pollutant,
                 "pollutant": args.pollutant,
                 "input_band": args.input_band,
+                "satellite_time_source": satellite_time_source,
+                "satellite_time_start": iso(sat_start),
+                "satellite_time_end": iso(sat_end),
+                "calmet_requested_stamp": effective_calmet_stamp,
+                "calmet_stamp_source": calmet_stamp_source,
                 "station_background_value": background,
                 "station_alpha": args.station_alpha,
                 "deblock_sigma_m": args.deblock_sigma_m,
                 "deblock_strength": args.deblock_strength,
                 "deblock_iterations": args.deblock_iterations,
+                "satellite_time_source": satellite_time_source,
+                "satellite_time_start": iso(sat_start),
+                "satellite_time_end": iso(sat_end),
+                "calmet_requested_stamp": effective_calmet_stamp,
+                "calmet_stamp_source": calmet_stamp_source,
                 "seamless": args.seamless,
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,

@@ -52,12 +52,6 @@ Each array must have shape `(ny, nx)` on the `GEO.DAT` grid. If `u10` and `v10` 
 
 CALMET/CMET files may contain multiple gridded records for the same variable at different model timestamps. SmokEye reads supported records and selects one array per meteorological field.
 
-The default is:
-
-```bash
---calmet-selector last
-```
-
 Available selector modes are:
 
 ```bash
@@ -66,7 +60,7 @@ Available selector modes are:
 --calmet-selector mean
 ```
 
-Use `first` or `last` when the CALMET file has already been trimmed to a short period or when the desired record order is known. Use `mean` when the pollutant raster represents a time average and the meteorological influence should also be averaged over the available records.
+For normal downscaling, SmokEye uses the pollutant raster timestamp to derive a target `YYYYMMDDHH` CALMET stamp and selects the closest available weather record for each field. Use `first` or `last` only with `--allow-untimed-satellite` or already trimmed CALMET files where record order is the documented time-selection rule. Use `mean` when the pollutant raster represents a time average and the meteorological influence should also be averaged over the available records.
 
 If the CALMET integer timestamp for the desired analysis time is known, select the nearest record with:
 
@@ -75,6 +69,8 @@ If the CALMET integer timestamp for the desired analysis time is known, select t
 ```
 
 The integer is interpreted only as a CALMET record stamp. SmokEye does not parse it as a calendar date, does not infer time zones, and does not compare it with dates embedded in filenames.
+
+Use `--max-calmet-stamp-delta` to limit how far the nearest available CALMET stamp may be from the requested or satellite-derived stamp. Untimed pollutant rasters fail by default; use `--allow-untimed-satellite` only for a documented diagnostic or preselected input package.
 
 For `.npz` meteorology, there is no internal time selection. The arrays are assumed to have already been selected or averaged for the intended pollutant analysis time.
 

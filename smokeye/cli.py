@@ -6,12 +6,22 @@ import argparse
 import sys
 from typing import List, Optional
 
-from smokeye import ai_downscaler, diffusion_downscaler, downscaler
+from smokeye import ai_downscaler, comparison, diffusion_downscaler, downscaler
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
+
+    if argv and argv[0] == "compare-calpuff":
+        parser = argparse.ArgumentParser(
+            prog="downscale_pollutant.py compare-calpuff",
+            description="Compare CALPUFF gridded output with a satellite/downscaled pollutant GeoTIFF.",
+        )
+        comparison.add_compare_calpuff_arguments(parser)
+        args = parser.parse_args(argv[1:])
+        comparison.run_compare_calpuff(args)
+        return
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(

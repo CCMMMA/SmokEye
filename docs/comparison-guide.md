@@ -2,6 +2,33 @@
 
 This guide shows how to compare deterministic and AI downscaling using the same input files, same command-line options, and matching output products.
 
+## CALPUFF-To-Satellite GeoTIFF Comparison
+
+Use `compare-calpuff` when you need pixel-wise comparison between a CALPUFF `.con`, `.dry`, or `.wet` style gridded binary output and a satellite/downscaled pollutant GeoTIFF:
+
+```bash
+python downscale_pollutant.py compare-calpuff \
+  --calpuff calpuff.con \
+  --geo GEO.DAT \
+  --satellite final_weight_gt_deblocked.tif \
+  --species NO2 \
+  --group TOTAL \
+  --time-start 2025-02-25T07:00:00 \
+  --time-end 2025-02-25T08:00:00 \
+  --satellite-time-start 2025-02-25T07:00:00 \
+  --satellite-time-end 2025-02-25T08:00:00 \
+  --time-selection closest \
+  --calpuff-scale 0.001 \
+  --background 2.0 \
+  --out-prefix outputs/no2_total_vs_satellite
+```
+
+The output files are `*.model.tif`, `*.satellite.tif`, `*.difference.tif`, `*.ratio.tif`, `*.stats.json`, and `*.stats.csv`. The model raster is converted as `raw_CALPUFF * calpuff_scale + calpuff_offset + background`; the reference raster is converted independently as `raw_satellite * satellite_scale + satellite_offset`.
+
+By default, SmokEye fails if the CALPUFF comparison window and reference validity window do not overlap by at least `--min-time-overlap-fraction`. Use `--time-overlap-policy warn` only for documented diagnostics. Use `--allow-untimed-satellite` only when the missing reference time is an explicit, documented assumption. CALPUFF record selection defaults to `--time-selection closest`: overlapping records are preferred, and if none overlap the requested window the nearest available record is selected by midpoint timestamp with file-order tie-breaking. `--max-closest-time-delta-minutes` limits how far that nearest CALPUFF record may be from the requested window. That closest-time decision is written to the JSON report so the comparison remains timestamp consistent and reproducible.
+
+Scientific caveats: grid alignment does not make products physically equivalent, satellite columns and near-surface model concentrations need explicit physics/unit conversion, background levels must come from measurements or documented assumptions, temporal mismatch can dominate differences, and deposition outputs should not be compared to concentration or column products without explicit conversion.
+
 ## 1. Prepare The Environment
 
 From the repository root:

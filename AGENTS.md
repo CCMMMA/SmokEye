@@ -11,4 +11,5 @@
 - Update README and relevant files under `docs/` whenever behavior, layout, command options, outputs, or development workflow changes.
 - Preserve reproducibility for model-assisted paths; any stochastic component must use a deliberate fixed seed or expose a documented configuration.
 - Treat geospatial metadata, CRS handling, raster transforms, nodata values, and conservation validation as correctness-critical.
+- Enforce timestamp consistency across downscaling, data preparation for comparison, and comparison/partition workflows. Exact time matches are preferred, but using the closest available timestamp is scientifically acceptable when the selection rule is explicit, deterministic, and documented in the outputs or diagnostics.
 - Enforce coarse-to-fine conservation as a hard scientific invariant: generated or regularized fine-grid outputs must aggregate back to the original coarse pollutant values unless an explicit, documented non-conservative diagnostic mode is requested.

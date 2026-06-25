@@ -8,6 +8,8 @@ SmokEye provides one command with three comparable workflows for downscaling a g
 
 All methods read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` target grid, and optional station CSV. They write a single-band GeoTIFF aligned to the `GEO.DAT` grid, plus optional diagnostic rasters and JSON reports. This makes the methods suitable for direct side-by-side comparison.
 
+Downscaling enforces timestamp consistency between the pollutant raster and weather data. SmokEye uses explicit `--satellite-time-start/--satellite-time-end` values or common GeoTIFF time metadata, then selects the closest CALMET records using a deterministic `YYYYMMDDHH` midpoint stamp unless `--calmet-stamp` is supplied. Untimed pollutant rasters require `--allow-untimed-satellite`.
+
 The top-level script is a thin compatibility entry point. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
 
 ## What The Workflow Does
@@ -55,6 +57,8 @@ python downscale_pollutant.py \
   output/deterministic_no2.tif \
   --pollutant NO2 \
   --input-band 1 \
+  --satellite-time-start 2024-06-28T11:00:00 \
+  --satellite-time-end 2024-06-28T12:00:00 \
   --groundtruth-csv data/groundtruth.csv \
   --groundtruth-value-column NO2 \
   --validate \
@@ -73,6 +77,8 @@ python downscale_pollutant.py --method ai \
   output/ai_no2.tif \
   --pollutant NO2 \
   --input-band 1 \
+  --satellite-time-start 2024-06-28T11:00:00 \
+  --satellite-time-end 2024-06-28T12:00:00 \
   --groundtruth-csv data/groundtruth.csv \
   --groundtruth-value-column NO2 \
   --validate \
@@ -91,6 +97,8 @@ python downscale_pollutant.py --method diffusion \
   output/diffusion_no2.tif \
   --pollutant NO2 \
   --input-band 1 \
+  --satellite-time-start 2024-06-28T11:00:00 \
+  --satellite-time-end 2024-06-28T12:00:00 \
   --diffusion-checkpoint runs/diffusion_hybrid/best.pt \
   --diffusion-samples 8 \
   --diffusion-seed 42 \
@@ -99,6 +107,35 @@ python downscale_pollutant.py --method diffusion \
 ```
 
 Diffusion inference fails with a clear error if `--diffusion-checkpoint` is omitted. This prevents deterministic output from being mislabeled as diffusion-assisted output.
+
+### Comparing CALPUFF output with satellite/downscaled pollutant GeoTIFFs
+
+SmokEye can align CALPUFF gridded outputs with a satellite or downscaled pollutant GeoTIFF for pixel-wise comparison. Provide the CALPUFF binary file, the CALMET/CALPUFF `GEO.DAT` grid file, the reference GeoTIFF, the pollutant species/group, a temporally consistent comparison window, and any unit conversion needed to bring CALPUFF values into the same unit as the reference raster.
+
+```bash
+python downscale_pollutant.py compare-calpuff \
+  --calpuff calpuff.con \
+  --geo GEO.DAT \
+  --satellite final_weight_gt_deblocked.tif \
+  --species NO2 \
+  --group TOTAL \
+  --time-start 2025-02-25T07:00:00 \
+  --time-end 2025-02-25T08:00:00 \
+  --satellite-time-start 2025-02-25T07:00:00 \
+  --satellite-time-end 2025-02-25T08:00:00 \
+  --time-agg mean \
+  --time-selection closest \
+  --calpuff-unit arbitrary \
+  --satellite-unit ug_m3 \
+  --target-unit ug_m3 \
+  --calpuff-scale 0.001 \
+  --background 2.0 \
+  --out-prefix outputs/no2_total_vs_satellite
+```
+
+The model compared against the satellite is `model = raw_CALPUFF * calpuff_scale + calpuff_offset + background`. The satellite/reference raster is converted independently as `satellite = raw_satellite * satellite_scale + satellite_offset`. Background is always expressed in the final target unit and is added after CALPUFF unit conversion.
+
+The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv` outputs using the supplied prefix. Use `--list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster. By default, mismatched or missing satellite/reference time metadata causes the command to fail, so temporally inconsistent comparisons are not produced accidentally. CALPUFF record selection defaults to `--time-selection closest`: overlapping records are preferred, and when none overlap the requested window SmokEye selects the closest available record by midpoint timestamp, breaks ties by file order, and records that deterministic choice in JSON diagnostics.
 
 ## Documentation
 
