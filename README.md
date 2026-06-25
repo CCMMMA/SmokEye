@@ -1,44 +1,25 @@
-# Pollutant Downscaler GEO.DAT/CALMET
+# SmokEye Pollutant Downscaler
 
-`pollutant-downscaler` is a standalone Python workflow for dynamically downscaling a gridded pollutant raster to the grid defined by a CALMET `GEO.DAT` file. It was developed for Sentinel-5P/TROPOMI NO2 experiments, but the current script is pollutant-agnostic and can be used with NO2, O3, PM10, PM2.5/PM25, SO2, CO, or any scalar pollutant field stored as a raster band.
+SmokEye provides two comparable workflows for downscaling a gridded pollutant raster to the grid defined by a CALMET `GEO.DAT` file:
 
-The output is a single-band GeoTIFF aligned to the `GEO.DAT` reference grid, typically 200 m, and optionally corrected using air-quality station measurements.
+- `downscale_pollutant_geodat_calmet.py`: deterministic dynamic downscaling with conservative allocation.
+- `downscale_pollutant_geodat_calmet_ai.py`: AI-based dynamic downscaling with the same input interface and the same output products.
 
-## Scientific idea
+Both scripts read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` target grid, and optional station CSV. Both write a single-band GeoTIFF aligned to the `GEO.DAT` grid, plus optional diagnostic rasters and JSON reports. This makes the two methods suitable for direct side-by-side comparison.
 
-The script does **not** simply resample the coarse raster. It treats the input raster value as a coarse observational constraint and distributes it over the finer `GEO.DAT` grid using a dynamic weight field built from:
+## What The Workflow Does
 
-- CALMET/CALWRF-style meteorology, when available;
-- terrain and land-use read from `GEO.DAT`;
-- optional station ground truth supplied as CSV;
-- optional seamless/deblocking regularization to reduce visible coarse-pixel seams.
-
-For each coarse source pixel `P` and fine cell `i`, the conservative allocation is:
+The scripts do not simply resample the source raster. They treat each source pixel value as a coarse observational constraint and distribute it over the finer CALMET grid using a weight field. The allocation is conservative before optional seamless/deblocking regularization:
 
 ```text
 fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
 ```
 
-where `w_i` is the dynamic fine-grid weight and `A_iP` is the area of intersection between fine cell `i` and coarse pixel `P`.
+where `w_i` is the fine-grid weight and `A_iP` is the overlap area between fine cell `i` and source pixel `P`.
 
-This preserves the coarse field when exact conservative mode is used. Seamless/deblocking regularization can make maps visually smoother, but it relaxes strict per-source-pixel conservation; the domain mean is preserved by default.
-
-## Main features
-
-- Reads any selected band from an input pollutant GeoTIFF.
-- Infers grid geometry, CRS, terrain, and land-use from CALMET `GEO.DAT`.
-- Supports optional `--geodat-sidecar` JSON if a local `GEO.DAT` variant cannot be inferred automatically.
-- Reads common Fortran-unformatted CALMET/CMET.DAT records, including `ZI`, `TEMPK`, `USTAR`, `Z0`, `U-LEV 1`, `V-LEV 1`, `ELEV`, and `ILANDU` when present.
-- Supports meteorological fields from `.npz` files on the `GEO.DAT` grid.
-- Uses station ground-truth CSV files with configurable pollutant/value column.
-- Estimates the average background pollutant value from stations.
-- Reports station before/after metrics and coarse-scale validation statistics.
-- Writes optional diagnostic rasters: dynamic weights and station correction field.
-- MIT licensed.
+The deterministic script builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI script builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, and validation behavior.
 
 ## Installation
-
-Create a virtual environment and install the requirements:
 
 ```bash
 python -m venv .venv
@@ -46,256 +27,97 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-On some systems `rasterio` may require GDAL-compatible wheels or a conda environment. A conda alternative is:
+On systems where `rasterio` needs GDAL-compatible wheels, a conda environment is often easier:
 
 ```bash
-conda create -n pollutant-downscaler -c conda-forge python=3.11 numpy rasterio shapely pyproj scipy
-conda activate pollutant-downscaler
+conda create -n smokeye -c conda-forge python=3.11 numpy rasterio shapely pyproj scipy
+conda activate smokeye
 ```
 
-## Input files
+## Quick Start
 
-### 1. Input pollutant raster
-
-A GeoTIFF containing the pollutant field. The script reads one 1-based band selected with `--input-band`.
-
-Example pollutants:
-
-- Sentinel-5P/TROPOMI tropospheric NO2 column;
-- satellite/model O3 field;
-- PM10 or PM2.5 raster field;
-- SO2 or CO raster field;
-- any scalar environmental variable where dynamic fine-grid allocation is meaningful.
-
-### 2. CALMET `GEO.DAT`
-
-The target grid is inferred from `GEO.DAT`. For the test dataset used during development the inferred grid was:
-
-```text
-CRS: EPSG:32633
-Grid: 100 x 100
-Resolution: 200 m x 200 m
-Origin: lower-left
-```
-
-If your `GEO.DAT` variant cannot be inferred automatically, provide a JSON sidecar:
-
-```json
-{
-  "crs": "EPSG:32633",
-  "nx": 100,
-  "ny": 100,
-  "x0": 434304.0,
-  "y0": 4515091.0,
-  "dx": 200.0,
-  "dy": 200.0,
-  "origin": "lower-left"
-}
-```
-
-Then pass it with `--geodat-sidecar geodat_grid.json`.
-
-### 3. CALMET/CMET meteorology or NPZ meteorology
-
-The positional `calmet_dat` argument can point to a CALMET/CMET.DAT binary file. The script attempts to read useful meteorological fields directly. If your CALMET binary layout differs, export fields to `.npz` and pass `--met-npz`.
-
-Expected NPZ arrays must have shape `(ny, nx)` on the `GEO.DAT` grid. Supported field names include:
-
-```text
-pblh, ws10, u10, v10, ustar, tempk, z0, elevation_calmet, landuse_calmet
-```
-
-If both `u10` and `v10` are present, `ws10` is derived automatically.
-
-### 4. Optional station ground truth CSV
-
-The CSV must contain station ID and coordinates:
-
-```csv
-ID,LAT,LON,NO2
-AQSTN_A1,40.814289,14.267230,9.9736753e-05
-AQSTN_B2,40.845249,14.321457,0.00015246817
-```
-
-For other pollutants, either name the value column after `--pollutant`, for example `O3` or `PM10`, or specify it explicitly:
-
-```bash
---groundtruth-value-column PM25
-```
-
-Column matching is case-insensitive. `PM25` also accepts `PM2.5` when present.
-
-## Usage
-
-### Inspect the target grid
+Inspect the target grid:
 
 ```bash
 python downscale_pollutant_geodat_calmet.py --inspect-geodat data/geo.dat
 ```
 
-### Inspect CALMET records
-
-```bash
-python downscale_pollutant_geodat_calmet.py --inspect-calmet data/cmet.dat
-```
-
-### Inspect station CSV and estimate background
+Run deterministic downscaling:
 
 ```bash
 python downscale_pollutant_geodat_calmet.py \
-  --pollutant NO2 \
-  --inspect-groundtruth examples/groundtruth_example.csv
-```
-
-### Basic dynamic downscaling
-
-```bash
-python downscale_pollutant_geodat_calmet.py \
-  data/input_pollutant.tif \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
   data/cmet.dat \
   data/geo.dat \
-  output/downscaled_pollutant.tif \
-  --pollutant NO2 \
-  --input-band 1 \
-  --validate
-```
-
-### Downscaling with station correction
-
-```bash
-python downscale_pollutant_geodat_calmet.py \
-  data/input_pollutant.tif \
-  data/cmet.dat \
-  data/geo.dat \
-  output/downscaled_no2_station_corrected.tif \
+  output/deterministic_no2.tif \
   --pollutant NO2 \
   --input-band 1 \
   --groundtruth-csv data/groundtruth.csv \
   --groundtruth-value-column NO2 \
   --validate \
-  --station-report output/station_report.json \
-  --write-weight output/final_weight.tif \
-  --write-correction output/station_correction.tif
+  --station-report output/deterministic_station_report.json \
+  --write-weight output/deterministic_weight.tif \
+  --write-correction output/deterministic_correction.tif
 ```
 
-### PM10 example
+Run AI downscaling with the same interface:
 
 ```bash
-python downscale_pollutant_geodat_calmet.py \
-  data/pm10_coarse.tif \
+python downscale_pollutant_geodat_calmet_ai.py \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
   data/cmet.dat \
   data/geo.dat \
-  output/pm10_200m.tif \
-  --pollutant PM10 \
+  output/ai_no2.tif \
+  --pollutant NO2 \
   --input-band 1 \
-  --groundtruth-csv data/pm10_stations.csv \
-  --groundtruth-value-column PM10 \
-  --validate
+  --groundtruth-csv data/groundtruth.csv \
+  --groundtruth-value-column NO2 \
+  --validate \
+  --station-report output/ai_station_report.json \
+  --write-weight output/ai_weight.tif \
+  --write-correction output/ai_correction.tif
 ```
 
-### O3 example
+## Documentation
 
-Ozone may have different source/dispersion behavior than NO2. The current dynamic weights are generic and should be reviewed for ozone-specific chemistry and regional transport.
+- [Workflow overview](docs/workflow.md)
+- [Input data requirements](docs/input-data.md)
+- [Deterministic method](docs/deterministic-method.md)
+- [AI method](docs/ai-method.md)
+- [Step-by-step comparison guide](docs/comparison-guide.md)
+- [Outputs, reports, and validation](docs/outputs-and-validation.md)
 
-```bash
-python downscale_pollutant_geodat_calmet.py \
-  data/o3_coarse.tif \
-  data/cmet.dat \
-  data/geo.dat \
-  output/o3_200m.tif \
-  --pollutant O3 \
-  --groundtruth-csv data/o3_stations.csv \
-  --groundtruth-value-column O3
-```
-
-## Background estimation
-
-When `--groundtruth-csv` is provided, the script estimates a background value from station measurements. Modes:
+## Repository Layout
 
 ```text
---background-mode low-percentile  # default
---background-mode mean
---background-mode median
---background-mode min
---background-mode none
-```
-
-For `low-percentile`, the default threshold is the 40th percentile:
-
-```bash
---background-percentile 40
-```
-
-The background is used in the station correction ratio by default through background-excess correction:
-
-```text
-ratio = max(obs - background, eps) / max(pred - background, eps)
-```
-
-Use direct observed/predicted ratios instead with:
-
-```bash
---station-direct-ratio
-```
-
-## Seamless/deblocking options
-
-Strict conservation per source pixel can reveal coarse-pixel boundaries. The script includes two regularization stages:
-
-```bash
---seamless / --no-seamless
---seamless-baseline-sigma-m 1400
---seamless-anomaly-sigma-m 1000
---seamless-strength 0.95
---deblock-sigma-m 400
---deblock-strength 0.75
---deblock-iterations 1
-```
-
-More aggressive seam removal:
-
-```bash
---seamless-baseline-sigma-m 2200 \
---seamless-anomaly-sigma-m 900 \
---seamless-strength 1.0 \
---deblock-sigma-m 700 \
---deblock-strength 0.85
-```
-
-Caution: stronger deblocking improves visual continuity but relaxes exact per-pixel conservation. Use `--validate` to quantify the impact.
-
-## Outputs
-
-Main output:
-
-- single-band GeoTIFF aligned to the `GEO.DAT` grid.
-
-Optional outputs:
-
-- `--write-weight`: final dynamic weight raster;
-- `--write-correction`: station multiplicative correction raster;
-- `--station-report`: JSON report with station metrics, background estimate, correction details, and conservation validation.
-
-## Limitations and scientific caveats
-
-- A 200 m output does not mean the satellite or source raster observed the pollutant at 200 m resolution.
-- The output is a model-assisted downscaling/allocation product.
-- For reactive pollutants such as NO2 and O3, chemistry, vertical sensitivity, emissions, and transport matter. If available, use a chemistry-transport model or pollutant-specific weights.
-- Station measurements are near-surface values, while many satellite products are column quantities. Bias correction using stations should be interpreted carefully.
-- The built-in weight model is intentionally conservative and generic. For production use, adapt `build_weights()` to the target pollutant, emissions inventory, land-use categories, and meteorological regime.
-
-## Repository layout
-
-```text
-pollutant-downscaler/
+SmokEye/
 ├── downscale_pollutant_geodat_calmet.py
+├── downscale_pollutant_geodat_calmet_ai.py
 ├── requirements.txt
 ├── README.md
-├── LICENSE
-├── .gitignore
-└── examples/
-    └── groundtruth_example.csv
+├── docs/
+│   ├── workflow.md
+│   ├── input-data.md
+│   ├── deterministic-method.md
+│   ├── ai-method.md
+│   ├── comparison-guide.md
+│   └── outputs-and-validation.md
+├── examples/
+│   └── groundtruth_example.csv
+└── data/
+    ├── S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif
+    ├── cmet.dat
+    ├── geo.dat
+    └── groundtruth.csv
 ```
+
+## Scientific Caveats
+
+- A 200 m output grid does not mean the satellite observed the pollutant at 200 m resolution.
+- The output is a model-assisted allocation product.
+- Optional seamless/deblocking regularization improves visual continuity but relaxes strict per-source-pixel conservation.
+- Station measurements are near-surface values, while some satellite products are column quantities. Station correction should be interpreted carefully.
+- For production use, review the weight logic for the target pollutant, emissions regime, meteorology, and local land-use classes.
 
 ## License
 
