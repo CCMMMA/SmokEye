@@ -97,6 +97,19 @@ python downscale_pollutant.py --inspect-geodat data/geo.dat
 
 This prints JSON metadata for the inferred grid, including CRS, grid dimensions, cell size, bounds, and whether elevation or land-use were found in `GEO.DAT`. Review this output carefully. CRS, transform, dimensions, and grid origin are correctness-critical for conservative spatial allocation.
 
+Also confirm the storage order of embedded arrays. The defaults assume `GEO.DAT` and CALMET binary arrays are stored from the lower/southern row upward:
+
+```bash
+--geodat-array-origin lower
+--calmet-array-origin lower
+```
+
+If terrain, land-use, meteorology, or a written weight raster appears vertically mirrored, rerun diagnostics with `upper` for the affected source. A useful strict diagnostic run writes the weight field without regularization:
+
+```bash
+--write-weight output/diagnostic_weight.tif --no-seamless --deblock-sigma-m 0
+```
+
 Inspect CALMET records:
 
 ```bash

@@ -14,6 +14,8 @@ The entry-point script delegates through `smokeye/cli.py` to `smokeye/downscaler
 
 The deterministic weight starts as ones and is modified by available local inputs.
 
+The orientation of those inputs is correctness-critical. `GEO.DAT` terrain/land-use and CALMET meteorology can be stored south-to-north or already north-to-south depending on the producer. SmokEye defaults to `--geodat-array-origin lower --calmet-array-origin lower`, which flips source arrays into raster row order. If the written weight raster appears vertically mirrored relative to known terrain, land use, or wind fields, rerun with `upper` for the affected source.
+
 ### Land-Use
 
 When land-use is available from `GEO.DAT`, class-specific factors are applied. Urban, built, or transport-like classes receive a modest enhancement; water and vegetation-like classes are reduced.

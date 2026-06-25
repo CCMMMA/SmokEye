@@ -59,6 +59,7 @@ class GeoGrid:
     dx: float
     dy: float
     origin: str = "lower-left"
+    array_origin: str = "lower"
     elevation: Optional[np.ndarray] = None
     landuse: Optional[np.ndarray] = None
 
@@ -86,6 +87,7 @@ class GeoGrid:
             "dx": self.dx,
             "dy": self.dy,
             "origin": self.origin,
+            "array_origin": self.array_origin,
             "x0": self.x0,
             "y0": self.y0,
             "bounds": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},
@@ -136,20 +138,39 @@ class RasterReference:
     nodata: Optional[float] = None
 
 
+def orient_grid_array(arr: np.ndarray, nx: int, ny: int, array_origin: str, dtype=None) -> np.ndarray:
+    out = np.asarray(arr).reshape((ny, nx))
+    origin = array_origin.lower()
+    if origin == "lower":
+        out = np.flipud(out)
+    elif origin != "upper":
+        raise ValueError(f"Unsupported array origin: {array_origin}")
+    if dtype is not None:
+        out = out.astype(dtype)
+    return out
+
+
 class GeoDATReader:
-    def __init__(self, geodat: Path, sidecar: Optional[Path] = None, require_projection: bool = False):
+    def __init__(
+        self,
+        geodat: Path,
+        sidecar: Optional[Path] = None,
+        require_projection: bool = False,
+        array_origin: str = "lower",
+    ):
         self.geodat = Path(geodat)
         self.sidecar = Path(sidecar) if sidecar else None
         self.require_projection = require_projection
+        self.array_origin = array_origin
 
     def read(self) -> GeoGrid:
         if self.sidecar:
-            return self._read_sidecar(self.sidecar)
+            return self._read_sidecar(self.sidecar, self.array_origin)
         text = self.geodat.read_text(errors="ignore")
         lines = text.splitlines()
         grid = self._infer_grid_from_header(lines, require_projection=self.require_projection)
-        landuse = self._read_landuse(lines, grid.nx, grid.ny)
-        elevation = self._read_elevation(lines, grid.nx, grid.ny)
+        landuse = self._read_landuse(lines, grid.nx, grid.ny, self.array_origin)
+        elevation = self._read_elevation(lines, grid.nx, grid.ny, self.array_origin)
         return GeoGrid(
             crs=grid.crs,
             nx=grid.nx,
@@ -159,12 +180,13 @@ class GeoDATReader:
             dx=grid.dx,
             dy=grid.dy,
             origin=grid.origin,
+            array_origin=self.array_origin,
             elevation=elevation,
             landuse=landuse,
         )
 
     @staticmethod
-    def _read_sidecar(sidecar: Path) -> GeoGrid:
+    def _read_sidecar(sidecar: Path, array_origin: str = "lower") -> GeoGrid:
         cfg = json.loads(sidecar.read_text())
         return GeoGrid(
             crs=CRS.from_user_input(cfg["crs"]),
@@ -175,6 +197,7 @@ class GeoDATReader:
             dx=float(cfg["dx"]),
             dy=float(cfg["dy"]),
             origin=cfg.get("origin", "lower-left"),
+            array_origin=cfg.get("array_origin", array_origin),
         )
 
     @staticmethod
@@ -258,18 +281,18 @@ class GeoDATReader:
         return None
 
     @classmethod
-    def _read_landuse(cls, lines: List[str], nx: int, ny: int) -> Optional[np.ndarray]:
+    def _read_landuse(cls, lines: List[str], nx: int, ny: int, array_origin: str = "lower") -> Optional[np.ndarray]:
         want = nx * ny
         for i, line in enumerate(lines):
             if "LAND USE DATA" in line.upper():
                 # Skip section title, NLU line, category list line; data starts after that.
                 arr = cls._numbers_after(lines, i + 3, want, "int")
                 if arr is not None:
-                    return np.flipud(arr.reshape((ny, nx)).astype(np.int16))
+                    return orient_grid_array(arr, nx, ny, array_origin, dtype=np.int16)
         return None
 
     @classmethod
-    def _read_elevation(cls, lines: List[str], nx: int, ny: int) -> Optional[np.ndarray]:
+    def _read_elevation(cls, lines: List[str], nx: int, ny: int, array_origin: str = "lower") -> Optional[np.ndarray]:
         want = nx * ny
         for i, line in enumerate(lines):
             if "TERRAIN" in line.upper() and ("HEIGHT" in line.upper() or "ELEV" in line.upper()):
@@ -283,7 +306,7 @@ class GeoDATReader:
                         factor = 1.0
                 arr = cls._numbers_after(lines, i + 1, want, "float")
                 if arr is not None:
-                    return np.flipud((arr * factor).reshape((ny, nx)).astype(np.float32))
+                    return orient_grid_array(arr * factor, nx, ny, array_origin, dtype=np.float32)
         return None
 
 
@@ -296,6 +319,7 @@ class MetReader:
         selector: str = "last",
         stamp: Optional[int] = None,
         allow_no_met: bool = False,
+        array_origin: str = "lower",
     ):
         self.path = Path(path) if path else None
         self.grid = grid
@@ -303,10 +327,12 @@ class MetReader:
         self.selector = selector
         self.stamp = stamp
         self.allow_no_met = allow_no_met
+        self.array_origin = array_origin
         self.selection_report: Dict[str, object] = {
             "source": "none",
             "selector": selector,
             "requested_stamp": stamp,
+            "array_origin": array_origin,
             "fields": {},
         }
 
@@ -341,6 +367,7 @@ class MetReader:
             "source": "npz",
             "selector": "preselected",
             "requested_stamp": self.stamp,
+            "array_origin": "upper",
             "fields": {name: {"selection": "preselected", "stamp": None} for name in sorted(met.keys())},
         }
         return met
@@ -408,7 +435,7 @@ class MetReader:
                     continue
                 if arr.size != n:
                     continue
-                arr = np.flipud(arr.reshape((ny, nx)))
+                arr = orient_grid_array(arr, nx, ny, self.array_origin, dtype=float)
                 fields[label].append((stamp, arr))
 
         met: Dict[str, np.ndarray] = {}
@@ -416,6 +443,7 @@ class MetReader:
             "source": str(path),
             "selector": "closest" if self.stamp is not None else self.selector,
             "requested_stamp": self.stamp,
+            "array_origin": self.array_origin,
             "fields": {},
         }
         direct = {
@@ -1223,6 +1251,8 @@ def main(
     if include_method_help:
         parser.add_argument("--method", choices=["deterministic", "ai", "diffusion"], default=method_name, help="Downscaling weight strategy to use.")
     parser.add_argument("--geodat-sidecar", type=Path, default=None, help="Optional grid JSON fallback.")
+    parser.add_argument("--geodat-array-origin", choices=["lower", "upper"], default="lower", help="Storage order of GEO.DAT terrain/land-use arrays. Use upper when arrays are already north-to-south raster order.")
+    parser.add_argument("--calmet-array-origin", choices=["lower", "upper"], default="lower", help="Storage order of CALMET/CMET gridded records. Use upper when records are already north-to-south raster order.")
     parser.add_argument("--met-npz", type=Path, default=None, help="Optional NPZ with pblh/ws10/u10/v10/ustar on GEO.DAT grid.")
     parser.add_argument("--pollutant", default="NO2", help="Pollutant name used for metadata and the default ground-truth value column, e.g. NO2, O3, PM10, PM25, SO2, CO.")
     parser.add_argument("--pollutant-unit", default="ug_m3", help="Pollutant concentration unit for input values, station values, and written outputs. Defaults to ug_m3.")
@@ -1267,7 +1297,7 @@ def main(
     args = parser.parse_args(argv)
 
     if args.inspect_geodat:
-        grid = GeoDATReader(args.inspect_geodat, args.geodat_sidecar).read()
+        grid = GeoDATReader(args.inspect_geodat, args.geodat_sidecar, array_origin=args.geodat_array_origin).read()
         print(json.dumps(grid.as_dict(), indent=2))
         if grid.elevation is not None:
             print("elevation:", json.dumps({
@@ -1324,7 +1354,7 @@ def main(
         effective_calmet_stamp = calmet_stamp_from_window(sat_start, sat_end)
         calmet_stamp_source = "satellite_midpoint_YYYYMMDDHH"
 
-    grid = GeoDATReader(args.geodat, args.geodat_sidecar).read()
+    grid = GeoDATReader(args.geodat, args.geodat_sidecar, array_origin=args.geodat_array_origin).read()
     met_reader = MetReader(
         args.calmet_dat,
         grid,
@@ -1332,6 +1362,7 @@ def main(
         selector=args.calmet_selector,
         stamp=effective_calmet_stamp,
         allow_no_met=args.allow_no_met,
+        array_origin=args.calmet_array_origin,
     )
     met = met_reader.read()
     max_calmet_delta = None if args.max_calmet_stamp_delta < 0 else args.max_calmet_stamp_delta
@@ -1355,6 +1386,11 @@ def main(
             "calmet_stamp_source": calmet_stamp_source,
             "max_calmet_stamp_delta": max_calmet_delta,
             "meteorology_selection": met_reader.selection_report,
+        },
+        "array_orientation": {
+            "geodat_array_origin": args.geodat_array_origin,
+            "calmet_array_origin": args.calmet_array_origin,
+            "note": "lower means source arrays are stored south-to-north and are flipped into raster row order; upper means source arrays are already north-to-south.",
         },
         "groundtruth_used": False,
         "deblocking": {
@@ -1450,6 +1486,8 @@ def main(
                 "pollutant": args.pollutant,
                 "pollutant_unit": args.pollutant_unit,
                 "input_band": args.input_band,
+                "geodat_array_origin": args.geodat_array_origin,
+                "calmet_array_origin": args.calmet_array_origin,
                 "satellite_time_source": satellite_time_source,
                 "satellite_time_start": iso(sat_start),
                 "satellite_time_end": iso(sat_end),
@@ -1505,6 +1543,8 @@ def main(
                 "deblock_strength": args.deblock_strength,
                 "deblock_iterations": args.deblock_iterations,
                 "pollutant_unit": args.pollutant_unit,
+                "geodat_array_origin": args.geodat_array_origin,
+                "calmet_array_origin": args.calmet_array_origin,
                 "satellite_time_source": satellite_time_source,
                 "satellite_time_start": iso(sat_start),
                 "satellite_time_end": iso(sat_end),

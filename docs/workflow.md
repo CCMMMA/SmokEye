@@ -46,6 +46,17 @@ For CALMET/CMET binary inputs, SmokEye reads all supported records for each mete
 
 The CALMET timestamp is read from the 4-byte integer following the 8-byte field label in each supported gridded record. For automatic selection, SmokEye converts the satellite/reference midpoint to a deterministic `YYYYMMDDHH` target stamp and records the chosen meteorology stamps in output diagnostics. Record selection is performed independently for each meteorological field, so datasets with missing fields at some times should be inspected carefully.
 
+## Grid Array Orientation
+
+Raster row 0 is the northern/top row. Some CALMET-family files store gridded values from the southern/lower row upward, while others are already in raster order. SmokEye exposes this explicitly:
+
+```bash
+--geodat-array-origin lower
+--calmet-array-origin lower
+```
+
+These defaults preserve historical behavior and flip source arrays into raster order. Use `upper` for a source whose arrays are already north-to-south. The selected origins are recorded in station reports and output tags. When a deterministic output shows a vertically mirrored fine-grid structure, inspect `--write-weight` output with `--no-seamless --deblock-sigma-m 0` before changing scientific weighting rules.
+
 ## Shared Command-Line Contract
 
 The command accepts the same positional arguments for both methods:

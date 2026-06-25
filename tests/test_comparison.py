@@ -8,12 +8,37 @@ import numpy as np
 
 from smokeye.calpuff_reader import CalpuffGridRecord
 from smokeye.comparison import _stats, add_compare_calpuff_arguments, aggregate_records, select_records_for_window
-from smokeye.downscaler import calmet_stamp_from_window, enforce_met_time_consistency
+from smokeye.downscaler import GeoDATReader, calmet_stamp_from_window, enforce_met_time_consistency, orient_grid_array
 from smokeye.temporal import time_check_report
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_grid_array_orientation_lower_flips_to_raster_order(self):
+        raw = np.array([1, 2, 3, 4])
+        lower = orient_grid_array(raw, nx=2, ny=2, array_origin="lower")
+        upper = orient_grid_array(raw, nx=2, ny=2, array_origin="upper")
+        self.assertTrue(np.array_equal(lower, np.array([[3, 4], [1, 2]])))
+        self.assertTrue(np.array_equal(upper, np.array([[1, 2], [3, 4]])))
+
+    def test_geodat_reader_array_origin_controls_embedded_arrays(self):
+        lines = [
+            "LAND USE DATA",
+            "NLU",
+            "CATEGORIES",
+            "1 2 3 4",
+            "TERRAIN HEIGHT 1.0",
+            "10 20 30 40",
+        ]
+        lu_lower = GeoDATReader._read_landuse(lines, nx=2, ny=2, array_origin="lower")
+        lu_upper = GeoDATReader._read_landuse(lines, nx=2, ny=2, array_origin="upper")
+        elev_lower = GeoDATReader._read_elevation(lines, nx=2, ny=2, array_origin="lower")
+        elev_upper = GeoDATReader._read_elevation(lines, nx=2, ny=2, array_origin="upper")
+        self.assertTrue(np.array_equal(lu_lower, np.array([[3, 4], [1, 2]], dtype=np.int16)))
+        self.assertTrue(np.array_equal(lu_upper, np.array([[1, 2], [3, 4]], dtype=np.int16)))
+        self.assertTrue(np.array_equal(elev_lower, np.array([[30, 40], [10, 20]], dtype=np.float32)))
+        self.assertTrue(np.array_equal(elev_upper, np.array([[10, 20], [30, 40]], dtype=np.float32)))
+
     def test_unit_conversion_and_background_report(self):
         raw_calpuff = np.full((2, 2), 1000.0, dtype=np.float32)
         converted = apply_linear_conversion(raw_calpuff, 0.001, 0.0)

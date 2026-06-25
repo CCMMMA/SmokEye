@@ -49,6 +49,22 @@ pblh, ws10, u10, v10, ustar, tempk, z0, elevation_calmet, landuse_calmet
 
 Each array must have shape `(ny, nx)` on the `GEO.DAT` grid. If `u10` and `v10` are present, `ws10` is derived automatically.
 
+#### Array Orientation
+
+CALMET/CMET binary grid records are read with:
+
+```bash
+--calmet-array-origin lower
+```
+
+This default preserves historical behavior: source records are assumed to be stored south-to-north and are flipped into north-to-south raster row order. If the CALMET producer already writes records in raster order, use:
+
+```bash
+--calmet-array-origin upper
+```
+
+The `.npz` path is always treated as already prepared in raster row order `(row 0 = north/top)`. Prepare `.npz` files with the same CRS, transform, and orientation as the `GEO.DAT` target grid.
+
 #### Time Selection
 
 CALMET/CMET files may contain multiple gridded records for the same variable at different model timestamps. SmokEye reads supported records and selects one array per meteorological field.
@@ -89,6 +105,20 @@ The reader attempts to infer:
 - optional terrain.
 - optional land-use.
 
+Embedded terrain and land-use arrays are read with:
+
+```bash
+--geodat-array-origin lower
+```
+
+This default means the values are stored from the lower/southern row upward and must be flipped into GeoTIFF row order. If the `GEO.DAT` arrays are already north-to-south, use:
+
+```bash
+--geodat-array-origin upper
+```
+
+Use `--write-weight` and a strict run (`--no-seamless --deblock-sigma-m 0`) to diagnose orientation issues. A vertically mirrored high-resolution pattern in the weight raster usually means `--geodat-array-origin`, `--calmet-array-origin`, or both need to be changed.
+
 If a local `GEO.DAT` variant cannot be inferred automatically, create a JSON sidecar:
 
 ```json
@@ -100,7 +130,8 @@ If a local `GEO.DAT` variant cannot be inferred automatically, create a JSON sid
   "y0": 4515091.0,
   "dx": 200.0,
   "dy": 200.0,
-  "origin": "lower-left"
+  "origin": "lower-left",
+  "array_origin": "lower"
 }
 ```
 

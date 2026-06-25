@@ -27,6 +27,12 @@ This writes the final dynamic weight field. If station correction is used, this 
 
 Compare deterministic and AI weight rasters to understand where the two methods differ before allocation.
 
+The weight raster is also the primary diagnostic for array-orientation problems. For deterministic runs, a vertically mirrored high-resolution pattern usually points to `--geodat-array-origin` or `--calmet-array-origin`. Run a strict diagnostic output with:
+
+```bash
+--write-weight output/weight.tif --no-seamless --deblock-sigma-m 0
+```
+
 ## Optional Station Correction Raster
 
 Use:
@@ -49,6 +55,7 @@ The JSON report includes:
 
 - inferred grid metadata;
 - meteorology fields used;
+- `GEO.DAT` and CALMET array-origin choices;
 - pollutant name and input band;
 - station summary;
 - background estimation settings and value;

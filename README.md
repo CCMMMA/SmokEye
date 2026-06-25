@@ -10,6 +10,8 @@ All methods read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` t
 
 Downscaling enforces timestamp consistency between the pollutant raster and weather data. SmokEye uses explicit `--satellite-time-start/--satellite-time-end` values or common GeoTIFF time metadata, then selects the closest CALMET records using a deterministic `YYYYMMDDHH` midpoint stamp unless `--calmet-stamp` is supplied. Untimed pollutant rasters require `--allow-untimed-satellite`.
 
+GEO.DAT terrain/land-use arrays and CALMET gridded records can be stored south-to-north or already north-to-south depending on the producer. SmokEye defaults to the historical `lower` storage assumption and flips those arrays into raster row order. If diagnostic weight rasters look vertically mirrored, run with `--geodat-array-origin upper` and/or `--calmet-array-origin upper` after confirming the source file order.
+
 Pollutant concentrations are treated and written as micrograms per cubic meter (`ug_m3`) by default. If an input product is in another unit, convert it before downscaling or use the explicit scale/offset controls in `compare-calpuff` so the final comparison unit remains `ug_m3`.
 
 The top-level script is a thin compatibility entry point. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
@@ -47,6 +49,12 @@ Inspect the target grid:
 
 ```bash
 python downscale_pollutant.py --inspect-geodat data/geo.dat
+```
+
+If embedded GEO.DAT arrays are already in north-to-south raster order:
+
+```bash
+python downscale_pollutant.py --inspect-geodat data/geo.dat --geodat-array-origin upper
 ```
 
 Run deterministic downscaling:
