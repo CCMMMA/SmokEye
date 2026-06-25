@@ -16,6 +16,7 @@ Requirements:
 
 - The raster must have a valid CRS.
 - Pixel values must be numeric pollutant values.
+- Pollutant concentrations are assumed to be in micrograms per cubic meter (`ug_m3`) unless `--pollutant-unit` documents a different already-prepared unit.
 - Nodata values are skipped when present.
 
 Example:

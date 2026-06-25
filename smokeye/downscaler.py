@@ -1043,7 +1043,7 @@ def seamless_deblock_field(
     return out.astype(np.float32)
 
 
-def write_pollutant_raster(path: Path, grid: GeoGrid, arr: np.ndarray, tags: Optional[dict] = None, pollutant: str = "POLLUTANT", source_band: int = 1) -> None:
+def write_pollutant_raster(path: Path, grid: GeoGrid, arr: np.ndarray, tags: Optional[dict] = None, pollutant: str = "POLLUTANT", source_band: int = 1, pollutant_unit: str = "ug_m3") -> None:
     profile = {
         "driver": "GTiff",
         "height": grid.ny,
@@ -1064,6 +1064,8 @@ def write_pollutant_raster(path: Path, grid: GeoGrid, arr: np.ndarray, tags: Opt
             "method": "conservative_dynamic_downscaling",
             "source_band": str(source_band),
             "pollutant": pollutant,
+            "pollutant_unit": pollutant_unit,
+            "units": pollutant_unit,
             "note": "Fine-grid field is model-assisted allocation, not native Sentinel-5P 200 m observation.",
         }
         if tags:
@@ -1078,9 +1080,10 @@ def conservative_downscale(
     validate: bool = False,
     band: int = 1,
     pollutant: str = "POLLUTANT",
+    pollutant_unit: str = "ug_m3",
 ) -> Optional[dict]:
     out, ref, input_band_array = conservative_downscale_array(s5p_path, grid, weights, band=band)
-    write_pollutant_raster(output_path, grid, out, pollutant=pollutant, source_band=band)
+    write_pollutant_raster(output_path, grid, out, pollutant=pollutant, source_band=band, pollutant_unit=pollutant_unit)
     if validate:
         return validate_conservation(ref, input_band_array, out, grid, weights)
     return None
@@ -1222,6 +1225,7 @@ def main(
     parser.add_argument("--geodat-sidecar", type=Path, default=None, help="Optional grid JSON fallback.")
     parser.add_argument("--met-npz", type=Path, default=None, help="Optional NPZ with pblh/ws10/u10/v10/ustar on GEO.DAT grid.")
     parser.add_argument("--pollutant", default="NO2", help="Pollutant name used for metadata and the default ground-truth value column, e.g. NO2, O3, PM10, PM25, SO2, CO.")
+    parser.add_argument("--pollutant-unit", default="ug_m3", help="Pollutant concentration unit for input values, station values, and written outputs. Defaults to ug_m3.")
     parser.add_argument("--input-band", type=int, default=1, help="1-based band number in the input pollutant raster to downscale.")
     parser.add_argument("--groundtruth-value-column", default=None, help="Column name in --groundtruth-csv containing station measurements. Defaults to --pollutant, with NO2 fallback for legacy files.")
     parser.add_argument("--groundtruth-csv", type=Path, default=None, help="Optional CSV with ID,LAT,LON,POLLUTANT station measurements.")
@@ -1341,6 +1345,7 @@ def main(
         "meteorology_fields": sorted(met.keys()),
         "method": method_name,
         "pollutant": args.pollutant,
+        "pollutant_unit": args.pollutant_unit,
         "input_band": args.input_band,
         "time_consistency": {
             "satellite_time_source": satellite_time_source,
@@ -1443,6 +1448,7 @@ def main(
                 "groundtruth_csv": str(args.groundtruth_csv),
                 "groundtruth_value_column": args.groundtruth_value_column or args.pollutant,
                 "pollutant": args.pollutant,
+                "pollutant_unit": args.pollutant_unit,
                 "input_band": args.input_band,
                 "satellite_time_source": satellite_time_source,
                 "satellite_time_start": iso(sat_start),
@@ -1454,11 +1460,6 @@ def main(
                 "deblock_sigma_m": args.deblock_sigma_m,
                 "deblock_strength": args.deblock_strength,
                 "deblock_iterations": args.deblock_iterations,
-                "satellite_time_source": satellite_time_source,
-                "satellite_time_start": iso(sat_start),
-                "satellite_time_end": iso(sat_end),
-                "calmet_requested_stamp": effective_calmet_stamp,
-                "calmet_stamp_source": calmet_stamp_source,
                 "seamless": args.seamless,
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
@@ -1466,6 +1467,7 @@ def main(
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,
+            pollutant_unit=args.pollutant_unit,
         )
         stats = None
         if args.validate:
@@ -1502,6 +1504,12 @@ def main(
                 "deblock_sigma_m": args.deblock_sigma_m,
                 "deblock_strength": args.deblock_strength,
                 "deblock_iterations": args.deblock_iterations,
+                "pollutant_unit": args.pollutant_unit,
+                "satellite_time_source": satellite_time_source,
+                "satellite_time_start": iso(sat_start),
+                "satellite_time_end": iso(sat_end),
+                "calmet_requested_stamp": effective_calmet_stamp,
+                "calmet_stamp_source": calmet_stamp_source,
                 "seamless": args.seamless,
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
@@ -1509,6 +1517,7 @@ def main(
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,
+            pollutant_unit=args.pollutant_unit,
         )
         stats = None
         if args.validate:

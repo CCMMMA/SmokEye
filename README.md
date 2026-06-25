@@ -10,6 +10,8 @@ All methods read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` t
 
 Downscaling enforces timestamp consistency between the pollutant raster and weather data. SmokEye uses explicit `--satellite-time-start/--satellite-time-end` values or common GeoTIFF time metadata, then selects the closest CALMET records using a deterministic `YYYYMMDDHH` midpoint stamp unless `--calmet-stamp` is supplied. Untimed pollutant rasters require `--allow-untimed-satellite`.
 
+Pollutant concentrations are treated and written as micrograms per cubic meter (`ug_m3`) by default. If an input product is in another unit, convert it before downscaling or use the explicit scale/offset controls in `compare-calpuff` so the final comparison unit remains `ug_m3`.
+
 The top-level script is a thin compatibility entry point. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
 
 ## What The Workflow Does
@@ -125,7 +127,7 @@ python downscale_pollutant.py compare-calpuff \
   --satellite-time-end 2025-02-25T08:00:00 \
   --time-agg mean \
   --time-selection closest \
-  --calpuff-unit arbitrary \
+  --calpuff-unit ug_m3 \
   --satellite-unit ug_m3 \
   --target-unit ug_m3 \
   --calpuff-scale 0.001 \
@@ -133,7 +135,7 @@ python downscale_pollutant.py compare-calpuff \
   --out-prefix outputs/no2_total_vs_satellite
 ```
 
-The model compared against the satellite is `model = raw_CALPUFF * calpuff_scale + calpuff_offset + background`. The satellite/reference raster is converted independently as `satellite = raw_satellite * satellite_scale + satellite_offset`. Background is always expressed in the final target unit and is added after CALPUFF unit conversion.
+The model compared against the satellite is `model = raw_CALPUFF * calpuff_scale + calpuff_offset + background`. The satellite/reference raster is converted independently as `satellite = raw_satellite * satellite_scale + satellite_offset`. Background is always expressed in the final target unit, `ug_m3` by default, and is added after CALPUFF unit conversion.
 
 The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv` outputs using the supplied prefix. Use `--list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster. By default, mismatched or missing satellite/reference time metadata causes the command to fail, so temporally inconsistent comparisons are not produced accidentally. CALPUFF record selection defaults to `--time-selection closest`: overlapping records are preferred, and when none overlap the requested window SmokEye selects the closest available record by midpoint timestamp, breaks ties by file order, and records that deterministic choice in JSON diagnostics.
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import unittest
+import argparse
 from datetime import datetime
 
 import numpy as np
 
 from smokeye.calpuff_reader import CalpuffGridRecord
-from smokeye.comparison import _stats, aggregate_records, select_records_for_window
+from smokeye.comparison import _stats, add_compare_calpuff_arguments, aggregate_records, select_records_for_window
 from smokeye.downscaler import calmet_stamp_from_window, enforce_met_time_consistency
 from smokeye.temporal import time_check_report
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
@@ -38,6 +39,35 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(np.allclose(satellite, 6.0))
         self.assertEqual(report["background"], 2.0)
         self.assertEqual(report["calpuff_scale"], 0.001)
+
+    def test_unit_report_defaults_to_micrograms_per_cubic_meter(self):
+        raw = np.ones((1, 1), dtype=np.float32)
+        report = unit_report(
+            raw,
+            raw,
+            raw,
+            raw,
+            raw,
+            calpuff_unit="ug_m3",
+            satellite_unit="ug_m3",
+            target_unit="ug_m3",
+            calpuff_scale=1.0,
+            calpuff_offset=0.0,
+            satellite_scale=1.0,
+            satellite_offset=0.0,
+            background=0.0,
+        )
+        self.assertEqual(report["target_unit"], "ug_m3")
+        self.assertEqual(report["calpuff_unit"], "ug_m3")
+        self.assertEqual(report["satellite_unit"], "ug_m3")
+
+    def test_compare_cli_defaults_to_micrograms_per_cubic_meter(self):
+        parser = argparse.ArgumentParser()
+        add_compare_calpuff_arguments(parser)
+        args = parser.parse_args(["--calpuff", "calpuff.con", "--geo", "GEO.DAT"])
+        self.assertEqual(args.calpuff_unit, "ug_m3")
+        self.assertEqual(args.satellite_unit, "ug_m3")
+        self.assertEqual(args.target_unit, "ug_m3")
 
 
     def test_time_consistency_strict_and_warn(self):

@@ -33,6 +33,7 @@ Unified method dispatch lives in `smokeye/cli.py`. Shared readers, allocation, s
 Each SmokEye command represents one pollutant analysis time or one pre-aggregated time window. The command reads explicit `--satellite-time-start/--satellite-time-end` values or common GeoTIFF time metadata and does not infer a timestamp from filenames. The user is responsible for giving mutually consistent inputs:
 
 - the selected pollutant raster band should represent the target analysis time or averaging period;
+- pollutant concentration values should be in micrograms per cubic meter (`ug_m3`) unless an explicit preprocessing or conversion step documents otherwise;
 - CALMET/CMET meteorology is selected for the same or closest allowed timestamp unless `--calmet-selector mean` is used for a matching average period;
 - station measurements should be prefiltered or pre-aggregated to the same time basis before they are passed with `--groundtruth-csv`;
 - NPZ meteorology files are treated as already time-selected arrays on the `GEO.DAT` grid.
