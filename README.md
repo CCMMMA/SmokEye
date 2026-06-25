@@ -161,6 +161,17 @@ SmokEye/
 - Station measurements are near-surface values, while some satellite products are column quantities. Station correction should be interpreted carefully.
 - For production use, review the weight logic for the target pollutant, emissions regime, meteorology, and local land-use classes.
 
+## References
+
+SmokEye's conservative allocation, ancillary-data weighting, and diffusion-assisted workflow are informed by the following peer-reviewed journal articles and conference proceedings:
+
+- Tobler, W. R. (1979). Smooth pycnophylactic interpolation for geographical regions. *Journal of the American Statistical Association*, 74(367), 519-530. https://doi.org/10.1080/01621459.1979.10481647
+- Eicher, C. L., & Brewer, C. A. (2001). Dasymetric mapping and areal interpolation: Implementation and evaluation. *Cartography and Geographic Information Science*, 28(2), 125-138. https://doi.org/10.1559/152304001782173727
+- Mennis, J. (2003). Generating surface models of population using dasymetric mapping. *The Professional Geographer*, 55(1), 31-42. https://doi.org/10.1111/0033-0124.10042
+- Song, Y., & Ermon, S. (2019). Generative modeling by estimating gradients of the data distribution. *Advances in Neural Information Processing Systems*, 32.
+- Ho, J., Jain, A., & Abbeel, P. (2020). Denoising diffusion probabilistic models. *Advances in Neural Information Processing Systems*, 33, 6840-6851.
+- Rombach, R., Blattmann, A., Lorenz, D., Esser, P., & Ommer, B. (2022). High-resolution image synthesis with latent diffusion models. *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition*, 10684-10695. https://doi.org/10.1109/CVPR52688.2022.01042
+
 ## License
 
 This project is released under the MIT License. See `LICENSE`.
