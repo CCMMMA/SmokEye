@@ -7,6 +7,15 @@ SmokEye downscales a coarse pollutant raster to a CALMET `GEO.DAT` grid. It prov
 
 Both methods use the same conservative allocation engine after the weight field is built.
 
+## Implementation Layout
+
+The two top-level scripts are compatibility entry points:
+
+- `downscale_pollutant_geodat_calmet.py` calls the shared deterministic workflow.
+- `downscale_pollutant_geodat_calmet_ai.py` calls the shared workflow with the AI weight builder.
+
+Shared readers, allocation, station correction, validation, deblocking, and raster writers live in `smokeye/downscaler.py`. The AI-only weight strategy lives in `smokeye/ai_downscaler.py`. This keeps method differences explicit while avoiding duplicate source code.
+
 ## Processing Stages
 
 1. Read the selected pollutant band from the input GeoTIFF.

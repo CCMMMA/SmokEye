@@ -8,6 +8,8 @@ downscale_pollutant_geodat_calmet_ai.py
 
 It has the same command-line interface and writes the same output types as the deterministic script. The main difference is how the fine-grid dynamic weight field is produced.
 
+The entry-point script delegates to `smokeye/ai_downscaler.py`, which provides the AI weight strategy to the shared workflow in `smokeye/downscaler.py`. The shared workflow owns argument parsing, readers, allocation, station correction, validation, deblocking, and output writing.
+
 ## Model Type
 
 The current AI implementation uses a deterministic Extreme Learning Machine-style model:

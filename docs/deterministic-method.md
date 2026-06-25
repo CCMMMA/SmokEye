@@ -8,6 +8,8 @@ downscale_pollutant_geodat_calmet.py
 
 It builds the fine-grid allocation weight from explicit rules. The resulting field is then used by the shared conservative allocation engine.
 
+The entry-point script delegates to `smokeye/downscaler.py`, where the deterministic `build_weights` strategy and the shared workflow are implemented.
+
 ## Weight Components
 
 The deterministic weight starts as ones and is modified by available local inputs.

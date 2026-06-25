@@ -7,6 +7,8 @@ SmokEye provides two comparable workflows for downscaling a gridded pollutant ra
 
 Both scripts read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` target grid, and optional station CSV. Both write a single-band GeoTIFF aligned to the `GEO.DAT` grid, plus optional diagnostic rasters and JSON reports. This makes the two methods suitable for direct side-by-side comparison.
 
+The script names are stable compatibility entry points. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
+
 ## What The Workflow Does
 
 The scripts do not simply resample the source raster. They treat each source pixel value as a coarse observational constraint and distribute it over the finer CALMET grid using a weight field. The allocation is conservative before optional seamless/deblocking regularization:
@@ -93,8 +95,13 @@ python downscale_pollutant_geodat_calmet_ai.py \
 SmokEye/
 ├── downscale_pollutant_geodat_calmet.py
 ├── downscale_pollutant_geodat_calmet_ai.py
+├── smokeye/
+│   ├── __init__.py
+│   ├── downscaler.py
+│   └── ai_downscaler.py
 ├── requirements.txt
 ├── README.md
+├── AGENTS.md
 ├── docs/
 │   ├── workflow.md
 │   ├── input-data.md
@@ -110,6 +117,13 @@ SmokEye/
     ├── geo.dat
     └── groundtruth.csv
 ```
+
+## Development Notes
+
+- Keep command-line compatibility in the two top-level scripts. They should remain thin wrappers.
+- Put shared behavior in `smokeye/downscaler.py`.
+- Put AI-specific weight-model behavior in `smokeye/ai_downscaler.py`.
+- Do not duplicate source code between deterministic and AI workflows; add strategy hooks to the shared workflow when methods need to differ.
 
 ## Scientific Caveats
 
