@@ -83,6 +83,7 @@ python downscale_pollutant.py --method ai \
 ## Documentation
 
 - [Workflow overview](docs/workflow.md)
+- [Getting started](docs/getting_started.md)
 - [Input data requirements](docs/input-data.md)
 - [Deterministic method](docs/deterministic-method.md)
 - [AI method](docs/ai-method.md)
@@ -104,6 +105,7 @@ SmokEye/
 ├── AGENTS.md
 ├── docs/
 │   ├── workflow.md
+│   ├── getting_started.md
 │   ├── input-data.md
 │   ├── deterministic-method.md
 │   ├── ai-method.md
