@@ -1,11 +1,12 @@
 # SmokEye Pollutant Downscaler
 
-SmokEye provides one command with two comparable workflows for downscaling a gridded pollutant raster to the grid defined by a CALMET `GEO.DAT` file:
+SmokEye provides one command with three comparable workflows for downscaling a gridded pollutant raster to the grid defined by a CALMET `GEO.DAT` file:
 
 - `python downscale_pollutant.py --method deterministic`: deterministic dynamic downscaling with conservative allocation.
 - `python downscale_pollutant.py --method ai`: AI-based dynamic downscaling with the same input interface and the same output products.
+- `python downscale_pollutant.py --method diffusion`: conservation-guided residual diffusion downscaling with hard coarse-to-fine normalization.
 
-Both methods read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` target grid, and optional station CSV. Both write a single-band GeoTIFF aligned to the `GEO.DAT` grid, plus optional diagnostic rasters and JSON reports. This makes the two methods suitable for direct side-by-side comparison.
+All methods read the same pollutant raster, CALMET/CMET meteorology, `GEO.DAT` target grid, and optional station CSV. They write a single-band GeoTIFF aligned to the `GEO.DAT` grid, plus optional diagnostic rasters and JSON reports. This makes the methods suitable for direct side-by-side comparison.
 
 The top-level script is a thin compatibility entry point. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
 
@@ -19,7 +20,7 @@ fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
 
 where `w_i` is the fine-grid weight and `A_iP` is the overlap area between fine cell `i` and source pixel `P`.
 
-The deterministic method builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI method builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, and validation behavior.
+The deterministic method builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI method builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, and validation behavior. The diffusion method starts from the deterministic conservative field, generates positive residual fine-grid structure from an explicit checkpoint, and then hard-normalizes the result so each source pollutant pixel footprint aggregates back to the original coarse value.
 
 ## Installation
 
@@ -80,6 +81,25 @@ python downscale_pollutant.py --method ai \
   --write-correction output/ai_correction.tif
 ```
 
+Run diffusion downscaling with an explicit checkpoint:
+
+```bash
+python downscale_pollutant.py --method diffusion \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
+  data/cmet.dat \
+  data/geo.dat \
+  output/diffusion_no2.tif \
+  --pollutant NO2 \
+  --input-band 1 \
+  --diffusion-checkpoint runs/diffusion_hybrid/best.pt \
+  --diffusion-samples 8 \
+  --diffusion-seed 42 \
+  --write-uncertainty \
+  --validate
+```
+
+Diffusion inference fails with a clear error if `--diffusion-checkpoint` is omitted. This prevents deterministic output from being mislabeled as diffusion-assisted output.
+
 ## Documentation
 
 - [Workflow overview](docs/workflow.md)
@@ -87,6 +107,7 @@ python downscale_pollutant.py --method ai \
 - [Input data requirements](docs/input-data.md)
 - [Deterministic method](docs/deterministic-method.md)
 - [AI method](docs/ai-method.md)
+- [Diffusion method](docs/diffusion-method.md)
 - [Step-by-step comparison guide](docs/comparison-guide.md)
 - [Outputs, reports, and validation](docs/outputs-and-validation.md)
 
@@ -98,8 +119,10 @@ SmokEye/
 ├── smokeye/
 │   ├── __init__.py
 │   ├── cli.py
+│   ├── ai_downscaler.py
+│   ├── diffusion_downscaler.py
 │   ├── downscaler.py
-│   └── ai_downscaler.py
+│   └── ...
 ├── requirements.txt
 ├── README.md
 ├── AGENTS.md
@@ -109,6 +132,7 @@ SmokEye/
 │   ├── input-data.md
 │   ├── deterministic-method.md
 │   ├── ai-method.md
+│   ├── diffusion-method.md
 │   ├── comparison-guide.md
 │   └── outputs-and-validation.md
 ├── examples/
@@ -133,6 +157,7 @@ SmokEye/
 - A 200 m output grid does not mean the satellite observed the pollutant at 200 m resolution.
 - The output is a model-assisted allocation product.
 - Optional seamless/deblocking regularization improves visual continuity but relaxes strict per-source-pixel conservation.
+- The diffusion method reapplies hard coarse-to-fine normalization after residual generation, so the written diffusion raster is the conservation-enforced product.
 - Station measurements are near-surface values, while some satellite products are column quantities. Station correction should be interpreted carefully.
 - For production use, review the weight logic for the target pollutant, emissions regime, meteorology, and local land-use classes.
 

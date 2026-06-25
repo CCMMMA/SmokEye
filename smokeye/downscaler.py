@@ -803,6 +803,85 @@ def conservative_downscale_array(s5p_path: Path, grid: GeoGrid, weights: np.ndar
     return out, ref, input_band_array
 
 
+def conservative_normalize_to_source(
+    src: RasterReference,
+    input_band_array: np.ndarray,
+    fine: np.ndarray,
+    grid: GeoGrid,
+    nonnegative: bool = True,
+) -> np.ndarray:
+    """Hard-normalize a fine field so each source-pixel footprint matches its coarse value."""
+    candidate = np.asarray(fine, dtype=np.float64)
+    if nonnegative:
+        candidate = np.where(np.isfinite(candidate), np.maximum(candidate, 0.0), np.nan)
+
+    transformer = Transformer.from_crs(src.crs, grid.crs, always_xy=True).transform
+    fine_transform = grid.transform
+    inv_transform = ~fine_transform
+    out_sum = np.zeros((grid.ny, grid.nx), dtype=np.float64)
+    out_area = np.zeros((grid.ny, grid.nx), dtype=np.float64)
+
+    for row in range(src.height):
+        for col in range(src.width):
+            value = input_band_array[row, col]
+            if not np.isfinite(value):
+                continue
+            if src.nodata is not None and value == src.nodata:
+                continue
+
+            x0, y0 = src.transform * (col, row)
+            x1, y1 = src.transform * (col + 1, row + 1)
+            poly_src = box(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            poly = shapely_transform(transformer, poly_src)
+            if poly.is_empty:
+                continue
+
+            minx, miny, maxx, maxy = poly.bounds
+            c0, r0 = inv_transform * (minx, maxy)
+            c1, r1 = inv_transform * (maxx, miny)
+            rmin = max(0, int(math.floor(min(r0, r1))) - 1)
+            rmax = min(grid.ny - 1, int(math.ceil(max(r0, r1))) + 1)
+            cmin = max(0, int(math.floor(min(c0, c1))) - 1)
+            cmax = min(grid.nx - 1, int(math.ceil(max(c0, c1))) + 1)
+            if rmax < rmin or cmax < cmin:
+                continue
+
+            overlaps: List[Tuple[int, int, float]] = []
+            weighted_sum = 0.0
+            area_total = 0.0
+            for rr in range(rmin, rmax + 1):
+                for cc in range(cmin, cmax + 1):
+                    if not np.isfinite(candidate[rr, cc]):
+                        continue
+                    inter = poly.intersection(cell_polygon(fine_transform, rr, cc))
+                    if inter.is_empty:
+                        continue
+                    area = inter.area
+                    if area <= 0:
+                        continue
+                    overlaps.append((rr, cc, area))
+                    weighted_sum += float(candidate[rr, cc]) * area
+                    area_total += area
+            if not overlaps or area_total <= 0:
+                continue
+
+            current_mean = weighted_sum / area_total
+            if np.isfinite(current_mean) and abs(current_mean) > 1.0e-30:
+                scale = float(value) / current_mean
+                for rr, cc, area in overlaps:
+                    out_sum[rr, cc] += candidate[rr, cc] * scale * area
+                    out_area[rr, cc] += area
+            else:
+                for rr, cc, area in overlaps:
+                    out_sum[rr, cc] += float(value) * area
+                    out_area[rr, cc] += area
+
+    out = np.full((grid.ny, grid.nx), np.nan, dtype=np.float32)
+    mask = out_area > 0
+    out[mask] = (out_sum[mask] / out_area[mask]).astype(np.float32)
+    return out
+
+
 def nan_gaussian_filter(arr: np.ndarray, sigma_cells: float) -> np.ndarray:
     """Gaussian smoothing that ignores NaN cells."""
     if sigma_cells <= 0:
@@ -1034,6 +1113,11 @@ def write_weight_raster(path: Path, grid: GeoGrid, weights: np.ndarray) -> None:
 
 WeightBuilder = Callable[[GeoGrid, Dict[str, np.ndarray]], np.ndarray]
 RasterTagBuilder = Callable[[dict], dict]
+MethodArgumentBuilder = Callable[[argparse.ArgumentParser], None]
+MethodOutputTransform = Callable[
+    [np.ndarray, np.ndarray, GeoGrid, RasterReference, np.ndarray, argparse.Namespace],
+    np.ndarray,
+]
 
 
 def identity_raster_tags(tags: dict) -> dict:
@@ -1049,6 +1133,8 @@ def deterministic_raster_tags(tags: dict) -> dict:
 def main(
     weight_builder: WeightBuilder = build_weights,
     raster_tag_builder: RasterTagBuilder = deterministic_raster_tags,
+    add_method_arguments: Optional[MethodArgumentBuilder] = None,
+    method_output_transform: Optional[MethodOutputTransform] = None,
     method_name: str = "deterministic",
     argv: Optional[List[str]] = None,
     include_method_help: bool = False,
@@ -1061,7 +1147,7 @@ def main(
     parser.add_argument("geodat", nargs="?", type=Path, help="CALMET GEO.DAT file.")
     parser.add_argument("output_tif", nargs="?", type=Path, help="Output single-band GeoTIFF.")
     if include_method_help:
-        parser.add_argument("--method", choices=["deterministic", "ai"], default=method_name, help="Downscaling weight strategy to use.")
+        parser.add_argument("--method", choices=["deterministic", "ai", "diffusion"], default=method_name, help="Downscaling weight strategy to use.")
     parser.add_argument("--geodat-sidecar", type=Path, default=None, help="Optional grid JSON fallback.")
     parser.add_argument("--met-npz", type=Path, default=None, help="Optional NPZ with pblh/ws10/u10/v10/ustar on GEO.DAT grid.")
     parser.add_argument("--pollutant", default="NO2", help="Pollutant name used for metadata and the default ground-truth value column, e.g. NO2, O3, PM10, PM25, SO2, CO.")
@@ -1096,6 +1182,8 @@ def main(
     parser.add_argument("--inspect-geodat", type=Path, default=None, help="Inspect/infer a GEO.DAT and exit.")
     parser.add_argument("--inspect-calmet", type=Path, default=None, help="List likely gridded CALMET records and exit.")
     parser.add_argument("--inspect-groundtruth", type=Path, default=None, help="Inspect a ground-truth CSV and exit.")
+    if add_method_arguments is not None:
+        add_method_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.inspect_geodat:
@@ -1120,6 +1208,19 @@ def main(
         st = read_groundtruth_csv(args.inspect_groundtruth, args.groundtruth_value_column or args.pollutant)
         bg = estimate_background(st.value, args.background_mode, args.background_percentile)
         print(json.dumps({"pollutant": args.pollutant, "stations": st.as_summary(), "background_value": bg}, indent=2))
+        return
+
+    if getattr(args, "diffusion_train", False) and method_output_transform is not None:
+        empty_grid = GeoGrid(crs=CRS.from_epsg(4326), nx=0, ny=0, x0=0.0, y0=0.0, dx=1.0, dy=1.0)
+        empty_ref = RasterReference(crs=CRS.from_epsg(4326), transform=Affine.identity(), width=0, height=0)
+        method_output_transform(
+            np.empty((0, 0), dtype=np.float32),
+            np.empty((0, 0), dtype=np.float32),
+            empty_grid,
+            empty_ref,
+            np.empty((0, 0), dtype=np.float32),
+            args,
+        )
         return
 
     missing = [name for name in ["input_tif", "calmet_dat", "geodat", "output_tif"] if getattr(args, name) is None]
@@ -1187,6 +1288,16 @@ def main(
         )
         return out
 
+    def apply_method_transform(
+        arr: np.ndarray,
+        weight_field: np.ndarray,
+        ref: RasterReference,
+        input_band_array: np.ndarray,
+    ) -> np.ndarray:
+        if method_output_transform is None:
+            return arr
+        return method_output_transform(arr, weight_field, grid, ref, input_band_array, args)
+
 
     if args.groundtruth_csv:
         stations = read_groundtruth_csv(args.groundtruth_csv, args.groundtruth_value_column or args.pollutant).with_xy(grid.crs)
@@ -1216,7 +1327,7 @@ def main(
         final_conservative_field, final_ref, final_input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
         pred_after_conservative, _, _ = sample_grid_values(final_conservative_field, grid, stations.x, stations.y)
         after_conservative = station_metrics(stations.value, pred_after_conservative)
-        final_field = apply_deblock(final_conservative_field, weights)
+        final_field = apply_method_transform(apply_deblock(final_conservative_field, weights), weights, final_ref, final_input_band_array)
         pred_after_regularized, _, _ = sample_grid_values(final_field, grid, stations.x, stations.y)
         after_regularized = station_metrics(stations.value, pred_after_regularized)
         write_pollutant_raster(
@@ -1267,7 +1378,7 @@ def main(
             write_weight_raster(args.write_weight, grid, weights)
             print(f"Wrote weight raster: {args.write_weight}")
         conservative_out, ref, input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
-        out = apply_deblock(conservative_out, weights)
+        out = apply_method_transform(apply_deblock(conservative_out, weights), weights, ref, input_band_array)
         write_pollutant_raster(
             args.output_tif,
             grid,
