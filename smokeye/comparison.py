@@ -1,4 +1,14 @@
-"""CALPUFF-to-reference GeoTIFF comparison workflow."""
+"""CALPUFF-to-reference GeoTIFF comparison workflow for SmokEye.
+
+This module replaces the standalone ``calpuff_to_satellite_geotiff.py`` script
+with a repository-native subcommand:
+
+    python downscale_pollutant.py compare-calpuff ...
+
+It follows the same SmokEye conventions used by the downscaling workflows:
+package-level implementation, thin CLI dispatch, explicit timestamp checks,
+explicit unit conversion, GeoTIFF outputs, and JSON/CSV diagnostics.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +16,8 @@ import argparse
 import csv
 import json
 import logging
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -17,13 +27,18 @@ from rasterio.warp import reproject
 
 from smokeye.calpuff_reader import CalpuffGridRecord, read_calpuff_grid_records, summarize_records
 from smokeye.downscaler import GeoDATReader
-from smokeye.temporal import discover_time_from_tags, expand_instant, overlap_seconds, parse_datetime, time_check_report, validate_window
-from smokeye.unit_conversion import apply_linear_conversion, unit_report
 from smokeye.logging_utils import configure_cli_logging
-
+from smokeye.temporal import (
+    discover_time_from_tags,
+    expand_instant,
+    overlap_seconds,
+    parse_datetime,
+    time_check_report,
+    validate_window,
+)
+from smokeye.unit_conversion import apply_linear_conversion, unit_report
 
 logger = logging.getLogger(__name__)
-
 
 SCIENTIFIC_CAVEATS = [
     "Grid alignment does not make two products physically equivalent.",
@@ -35,25 +50,39 @@ SCIENTIFIC_CAVEATS = [
 
 
 def add_compare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--calpuff", type=Path, required=True)
-    parser.add_argument("--geo", type=Path, required=True)
-    parser.add_argument("--satellite", type=Path, default=None)
+    """Register the ``compare-calpuff`` CLI arguments."""
+    parser.add_argument("--calpuff", type=Path, required=True, help="CALPUFF .con/.dry/.wet style Fortran-unformatted output")
+    parser.add_argument("--geo", type=Path, required=True, help="CALMET/CALPUFF GEO.DAT defining the CALPUFF grid")
+    parser.add_argument("--satellite", type=Path, default=None, help="Reference satellite/downscaled pollutant GeoTIFF")
     parser.add_argument("--satellite-band", type=int, default=1)
-    parser.add_argument("--species", default="NO2")
-    parser.add_argument("--group", default="TOTAL")
-    parser.add_argument("--level", default=None)
-    parser.add_argument("--list-records", action="store_true")
-    parser.add_argument("--time-start", default=None)
-    parser.add_argument("--time-end", default=None)
-    parser.add_argument("--satellite-time-start", default=None)
-    parser.add_argument("--satellite-time-end", default=None)
+
+    parser.add_argument("--species", default="NO2", help="CALPUFF species label, for example NO2, SO2, PM10")
+    parser.add_argument("--group", default="TOTAL", help="CALPUFF source group label, for example TOTAL or PTS1")
+    parser.add_argument("--level", default=None, help="Optional CALPUFF vertical level label")
+    parser.add_argument("--list-records", action="store_true", help="List available CALPUFF records and exit without requiring --satellite")
+
+    parser.add_argument("--time-start", default=None, help="Requested CALPUFF comparison-window start, ISO datetime")
+    parser.add_argument("--time-end", default=None, help="Requested CALPUFF comparison-window end, ISO datetime")
+    parser.add_argument("--satellite-time-start", default=None, help="Reference raster validity-window start, ISO datetime")
+    parser.add_argument("--satellite-time-end", default=None, help="Reference raster validity-window end, ISO datetime")
     parser.add_argument("--satellite-instant-duration-minutes", type=float, default=None)
     parser.add_argument("--time-overlap-policy", choices=["strict", "warn", "ignore"], default="strict")
     parser.add_argument("--min-time-overlap-fraction", type=float, default=0.95)
     parser.add_argument("--allow-untimed-satellite", action="store_true")
     parser.add_argument("--time-agg", choices=["mean", "sum", "first", "last", "max"], default="mean")
-    parser.add_argument("--time-selection", choices=["overlap", "closest"], default="closest", help="Select overlapping CALPUFF records, or the closest available record when no overlap exists. Defaults to closest.")
-    parser.add_argument("--max-closest-time-delta-minutes", type=float, default=60.0, help="Maximum allowed midpoint delta when --time-selection closest is used. Use a negative value to disable the limit.")
+    parser.add_argument(
+        "--time-selection",
+        choices=["overlap", "closest"],
+        default="closest",
+        help="Select overlapping CALPUFF records, or the closest available record when no overlap exists.",
+    )
+    parser.add_argument(
+        "--max-closest-time-delta-minutes",
+        type=float,
+        default=60.0,
+        help="Maximum allowed midpoint delta for --time-selection closest; negative disables the limit.",
+    )
+
     parser.add_argument("--calpuff-unit", default="ug_m3")
     parser.add_argument("--calpuff-scale", type=float, default=1.0)
     parser.add_argument("--calpuff-offset", type=float, default=0.0)
@@ -61,8 +90,9 @@ def add_compare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--satellite-scale", type=float, default=1.0)
     parser.add_argument("--satellite-offset", type=float, default=0.0)
     parser.add_argument("--target-unit", default="ug_m3")
-    parser.add_argument("--background", type=float, default=0.0)
-    parser.add_argument("--array-origin", choices=["lower", "upper"], default="lower")
+    parser.add_argument("--background", type=float, default=0.0, help="Constant background in target units, added after CALPUFF conversion")
+
+    parser.add_argument("--array-origin", choices=["lower", "upper"], default="lower", help="CALPUFF grid-array storage order before conversion to raster rows")
     parser.add_argument("--resampling", choices=["nearest", "bilinear", "average"], default="bilinear")
     parser.add_argument("--out-prefix", type=Path, default=None)
 
@@ -72,7 +102,14 @@ def _filter_records(records: List[CalpuffGridRecord], species: str, group: str, 
     if level is not None:
         selected = [r for r in selected if (r.level or "").upper() == level.upper()]
     if not selected:
-        raise ValueError(f"No CALPUFF records matched species={species!r}, group={group!r}, level={level!r}")
+        available = {}
+        for record in records:
+            available.setdefault(record.group, set()).add(record.species)
+        available_text = "; ".join(f"{g}: {', '.join(sorted(s))}" for g, s in sorted(available.items()))
+        raise ValueError(
+            f"No CALPUFF records matched species={species!r}, group={group!r}, level={level!r}. "
+            f"Available groups/species: {available_text}"
+        )
     return selected
 
 
@@ -86,18 +123,48 @@ def _record_midpoint(record: CalpuffGridRecord) -> Optional[datetime]:
     return _midpoint(record.start, record.end)
 
 
-def select_records_for_window(records: List[CalpuffGridRecord], start, end, time_selection: str, max_closest_delta_seconds: Optional[float] = 3600.0) -> Tuple[List[CalpuffGridRecord], np.ndarray, dict]:
+def _record_time_dict(record: CalpuffGridRecord, metric: Optional[float]) -> dict:
+    row = {
+        "record_index": record.record_index,
+        "species": record.species,
+        "group": record.group,
+        "level": record.level,
+        "start": record.start.isoformat() if record.start else None,
+        "end": record.end.isoformat() if record.end else None,
+    }
+    if metric is not None:
+        row["overlap_or_delta_seconds"] = metric
+    return row
+
+
+def select_records_for_window(
+    records: List[CalpuffGridRecord],
+    start: Optional[datetime],
+    end: Optional[datetime],
+    time_selection: str,
+    max_closest_delta_seconds: Optional[float] = 3600.0,
+) -> Tuple[List[CalpuffGridRecord], np.ndarray, dict]:
+    """Select records and weights for a requested temporal window."""
     validate_window(start, end, "CALPUFF comparison time")
+    if start is None or end is None:
+        return list(records), np.ones(len(records), dtype=float), {
+            "time_selection": "all",
+            "time_selection_rule": "no comparison window supplied; all matching records were aggregated in file order",
+            "selected_record_count": len(records),
+            "selected_record_times": [_record_time_dict(r, None) for r in records],
+        }
+
     overlaps = np.array([overlap_seconds(start, end, r.start, r.end) if r.start and r.end else 0.0 for r in records], dtype=float)
     timed = overlaps > 0.0
+
     if not timed.any() and all(r.start is None or r.end is None for r in records):
-        chosen = list(records)
-        return chosen, np.ones(len(chosen), dtype=float), {
+        return list(records), np.ones(len(records), dtype=float), {
             "time_selection": "untimed",
             "time_selection_rule": "all selected records have no usable timestamps; records were aggregated in file order",
-            "selected_record_count": len(chosen),
-            "selected_record_times": [_record_time_dict(r, None) for r in chosen],
+            "selected_record_count": len(records),
+            "selected_record_times": [_record_time_dict(r, None) for r in records],
         }
+
     if not timed.any():
         if time_selection != "closest":
             raise ValueError("No selected CALPUFF records overlap the requested comparison window")
@@ -111,7 +178,7 @@ def select_records_for_window(records: List[CalpuffGridRecord], start, end, time
                 distances.append((abs((record_mid - requested_mid).total_seconds()), index))
         distance, index = min(distances, key=lambda item: (item[0], item[1]))
         if not np.isfinite(distance):
-            raise ValueError("No selected CALPUFF records overlap the requested comparison window and no closest timestamp can be determined")
+            raise ValueError("No overlapping or timestamped CALPUFF record can be selected")
         if max_closest_delta_seconds is not None and distance > max_closest_delta_seconds:
             raise ValueError(
                 f"Closest CALPUFF record midpoint is {distance:.0f} seconds from the requested window midpoint, "
@@ -120,12 +187,13 @@ def select_records_for_window(records: List[CalpuffGridRecord], start, end, time
         chosen = [records[index]]
         return chosen, np.ones(1, dtype=float), {
             "time_selection": "closest",
-            "time_selection_rule": "no overlapping CALPUFF record was available; selected the record with the nearest midpoint timestamp, breaking ties by file order",
+            "time_selection_rule": "no overlapping CALPUFF record was available; selected the nearest midpoint timestamp, breaking ties by file order",
             "closest_time_delta_seconds": float(distance),
             "max_closest_time_delta_seconds": max_closest_delta_seconds,
             "selected_record_count": 1,
             "selected_record_times": [_record_time_dict(chosen[0], float(distance))],
         }
+
     chosen = [r for r, keep in zip(records, timed) if keep]
     weights = overlaps[timed]
     return chosen, weights, {
@@ -136,20 +204,9 @@ def select_records_for_window(records: List[CalpuffGridRecord], start, end, time
     }
 
 
-def _record_time_dict(record: CalpuffGridRecord, metric: Optional[float]) -> dict:
-    row = {
-        "species": record.species,
-        "group": record.group,
-        "level": record.level,
-        "start": record.start.isoformat() if record.start else None,
-        "end": record.end.isoformat() if record.end else None,
-    }
-    if metric is not None:
-        row["overlap_or_delta_seconds"] = metric
-    return row
-
-
 def aggregate_selected_records(chosen: List[CalpuffGridRecord], weights: np.ndarray, method: str) -> np.ndarray:
+    if not chosen:
+        raise ValueError("Cannot aggregate zero CALPUFF records")
     if method == "first":
         return chosen[0].array.astype(np.float32)
     if method == "last":
@@ -165,9 +222,15 @@ def aggregate_selected_records(chosen: List[CalpuffGridRecord], weights: np.ndar
     return np.average(stack, axis=0, weights=weights).astype(np.float32)
 
 
-def aggregate_records(records: List[CalpuffGridRecord], start, end, method: str, time_selection: str = "closest", max_closest_delta_seconds: Optional[float] = 3600.0) -> np.ndarray:
-    chosen, weights, _ = select_records_for_window(records, start, end, time_selection, max_closest_delta_seconds)
-    return aggregate_selected_records(chosen, weights, method)
+def aggregate_records(
+    records: List[CalpuffGridRecord],
+    start: Optional[datetime],
+    end: Optional[datetime],
+    method: str,
+) -> np.ndarray:
+    """Backward-compatible aggregation helper used by older comparison tests."""
+    selected, weights, _ = select_records_for_window(records, start, end, "overlap")
+    return aggregate_selected_records(selected, weights, method)
 
 
 def _stats(model: np.ndarray, satellite: np.ndarray) -> dict:
@@ -224,9 +287,9 @@ def _out_path(prefix: Path, suffix: str) -> Path:
 
 def run_compare_calpuff(args: argparse.Namespace) -> None:
     configure_cli_logging()
-
     grid = GeoDATReader(args.geo, None, require_projection=True).read()
     records = read_calpuff_grid_records(args.calpuff, grid.nx, grid.ny, array_origin=args.array_origin)
+
     if args.list_records:
         logger.info(json.dumps(summarize_records(records), indent=2))
         return
@@ -241,26 +304,33 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
 
     selected = _filter_records(records, args.species, args.group, args.level)
     max_closest_delta = None if args.max_closest_time_delta_minutes < 0 else args.max_closest_time_delta_minutes * 60.0
-    selected_for_time, time_weights, calpuff_time_selection = select_records_for_window(selected, cal_start, cal_end, args.time_selection, max_closest_delta)
+    selected_for_time, time_weights, calpuff_time_selection = select_records_for_window(
+        selected, cal_start, cal_end, args.time_selection, max_closest_delta
+    )
     raw_calpuff = aggregate_selected_records(selected_for_time, time_weights, args.time_agg)
     calpuff_target = apply_linear_conversion(raw_calpuff, args.calpuff_scale, args.calpuff_offset)
     model_native = (calpuff_target + np.float32(args.background)).astype(np.float32)
 
     resampling = {"nearest": Resampling.nearest, "bilinear": Resampling.bilinear, "average": Resampling.average}[args.resampling]
+
     with rasterio.open(args.satellite) as src:
         sat_raw = src.read(args.satellite_band).astype(np.float32)
         sat_mask = src.read_masks(args.satellite_band) == 0
         if src.nodata is not None:
             sat_mask |= sat_raw == src.nodata
         sat_raw = np.where(sat_mask, np.nan, sat_raw)
+
         sat_start = parse_datetime(args.satellite_time_start)
         sat_end = parse_datetime(args.satellite_time_end)
         sat_source = "cli" if sat_start is not None or sat_end is not None else "missing"
         if sat_start is None and sat_end is None:
-            sat_start, sat_end, sat_source = discover_time_from_tags((src.tags(), src.tags(args.satellite_band)), args.satellite_instant_duration_minutes)
+            sat_start, sat_end, sat_source = discover_time_from_tags(
+                (src.tags(), src.tags(args.satellite_band)), args.satellite_instant_duration_minutes
+            )
         else:
             validate_window(sat_start, sat_end, "satellite time", allow_instant=True)
             sat_start, sat_end = expand_instant(sat_start, sat_end, args.satellite_instant_duration_minutes)
+
         report_time = time_check_report(
             cal_start,
             cal_end,
@@ -271,6 +341,7 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
             min_fraction=args.min_time_overlap_fraction,
             allow_untimed_satellite=args.allow_untimed_satellite,
         )
+
         sat_target = apply_linear_conversion(sat_raw, args.satellite_scale, args.satellite_offset)
         target_profile = src.profile.copy()
         target_crs = src.crs
@@ -289,10 +360,16 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
         dst_nodata=np.nan,
         resampling=resampling,
     )
+
     model_aligned = np.where(np.isfinite(sat_target), model_aligned, np.nan).astype(np.float32)
     sat_target = sat_target.astype(np.float32)
     difference = (model_aligned - sat_target).astype(np.float32)
-    ratio = np.divide(model_aligned, sat_target, out=np.full_like(model_aligned, np.nan), where=np.isfinite(sat_target) & (sat_target != 0.0)).astype(np.float32)
+    ratio = np.divide(
+        model_aligned,
+        sat_target,
+        out=np.full_like(model_aligned, np.nan),
+        where=np.isfinite(sat_target) & (sat_target != 0.0),
+    ).astype(np.float32)
     stats = _stats(model_aligned, sat_target)
 
     prefix = Path(args.out_prefix)
@@ -303,7 +380,13 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
 
     target_unit = args.target_unit or args.satellite_unit
     report = {
-        "calpuff": {"path": str(args.calpuff), "species": args.species, "group": args.group, "level": args.level, "time_aggregation": args.time_agg},
+        "calpuff": {
+            "path": str(args.calpuff),
+            "species": args.species,
+            "group": args.group,
+            "level": args.level,
+            "time_aggregation": args.time_agg,
+        },
         "calpuff_time_selection": calpuff_time_selection,
         "geo": grid.as_dict(),
         "satellite": {"path": str(args.satellite), "band": args.satellite_band},
@@ -326,9 +409,19 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
         "statistics": stats,
         "notes": SCIENTIFIC_CAVEATS,
     }
+
     json_path = _out_path(prefix, ".stats.json")
     csv_path = _out_path(prefix, ".stats.csv")
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     _write_csv(csv_path, stats)
-    logger.info(json.dumps({"outputs": [str(Path(str(prefix) + suffix)) for suffix in (".model.tif", ".satellite.tif", ".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")], "statistics": stats}, indent=2))
+
+    logger.info(
+        json.dumps(
+            {
+                "outputs": [str(_out_path(prefix, suffix)) for suffix in (".model.tif", ".satellite.tif", ".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")],
+                "statistics": stats,
+            },
+            indent=2,
+        )
+    )

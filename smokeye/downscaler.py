@@ -1049,9 +1049,8 @@ def deblock_fine_field(
     This is a visual/regularization step applied after dynamic conservative allocation.
     It smooths only at the fine-grid scale using a NaN-aware Gaussian filter and blends
     the result with the original fine field. If preserve_mean is true, the domain mean
-    over valid cells is restored after each iteration. Per-satellite-pixel hard conservation is
-    intentionally not re-applied here, because hard per-pixel constraints are exactly what
-    makes coarse pixel boundaries visible.
+    over valid cells is restored after each iteration. The caller is responsible for
+    applying source-pixel conservation normalization before writing scientific outputs.
     """
     if sigma_m <= 0 or strength <= 0 or iterations <= 0:
         return fine
@@ -1097,9 +1096,8 @@ def seamless_deblock_field(
 
     The recomposed field = smooth_baseline * weight_anomaly. This removes most
     coarse satellite pixel edges while retaining CALMET/DTM/station-driven local
-    structure. It preserves the domain mean by default, but does not enforce
-    hard conservation inside every original satellite pixel, because that hard
-    constraint is precisely what makes the coarse cells visible.
+    structure. It preserves the domain mean by default. The caller is responsible
+    for applying source-pixel conservation normalization before writing scientific outputs.
     """
     if strength <= 0 or baseline_sigma_m <= 0:
         return fine.astype(np.float32, copy=True)
@@ -1567,7 +1565,8 @@ def main(
             "strength": args.deblock_strength,
             "iterations": args.deblock_iterations,
             "mean_preserve": not args.no_deblock_mean_preserve,
-            "note": "Anti-blocking is a soft regularization step; strict per-satellite-pixel conservation can reveal coarse pixel boundaries."
+            "conservation_normalized_after_regularization": True,
+            "note": "Anti-blocking is applied as regularization, then the written output is hard-normalized back to each source pollutant pixel."
         },
         "seamless": {
             "enabled": args.seamless,
@@ -1576,7 +1575,8 @@ def main(
             "strength": args.seamless_strength,
             "anomaly_min": args.seamless_anomaly_min,
             "anomaly_max": args.seamless_anomaly_max,
-            "note": "Seamless recomposition removes the hard piecewise-constant satellite component by using a smooth baseline multiplied by high-resolution dynamic anomalies."
+            "conservation_normalized_after_regularization": True,
+            "note": "Seamless recomposition uses a smooth baseline multiplied by high-resolution dynamic anomalies; the written output is then hard-normalized back to each source pollutant pixel."
         },
     }
     def apply_deblock(arr: np.ndarray, weight_field: np.ndarray) -> np.ndarray:
@@ -1613,6 +1613,16 @@ def main(
             return arr
         return method_output_transform(arr, weight_field, grid, ref, input_band_array, args)
 
+    def finalize_output(
+        conservative_field: np.ndarray,
+        weight_field: np.ndarray,
+        ref: RasterReference,
+        input_band_array: np.ndarray,
+    ) -> np.ndarray:
+        regularized = apply_deblock(conservative_field, weight_field)
+        transformed = apply_method_transform(regularized, weight_field, ref, input_band_array)
+        return conservative_normalize_to_source(ref, input_band_array, transformed, grid)
+
 
     if args.groundtruth_csv:
         stations = read_groundtruth_csv(args.groundtruth_csv, args.groundtruth_value_column or args.pollutant).with_xy(grid.crs)
@@ -1642,7 +1652,7 @@ def main(
         final_conservative_field, final_ref, final_input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
         pred_after_conservative, _, _ = sample_grid_values(final_conservative_field, grid, stations.x, stations.y)
         after_conservative = station_metrics(stations.value, pred_after_conservative)
-        final_field = apply_method_transform(apply_deblock(final_conservative_field, weights), weights, final_ref, final_input_band_array)
+        final_field = finalize_output(final_conservative_field, weights, final_ref, final_input_band_array)
         pred_after_regularized, _, _ = sample_grid_values(final_field, grid, stations.x, stations.y)
         after_regularized = station_metrics(stations.value, pred_after_regularized)
         write_pollutant_raster(
@@ -1671,6 +1681,7 @@ def main(
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
                 "seamless_strength": args.seamless_strength,
+                "conservation_normalized": True,
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,
@@ -1680,7 +1691,7 @@ def main(
         if args.validate:
             stats = {
                 "conservative_allocation": validate_conservation(final_ref, final_input_band_array, final_conservative_field, grid, weights),
-                "written_regularized_output": validate_conservation(final_ref, final_input_band_array, final_field, grid, weights),
+                "written_regularized_normalized_output": validate_conservation(final_ref, final_input_band_array, final_field, grid, weights),
             }
 
         report.update({
@@ -1696,13 +1707,13 @@ def main(
         })
         logger.info("Station metrics before correction: %s", json.dumps(before, indent=2))
         logger.info("Station metrics after correction before regularization: %s", json.dumps(after_conservative, indent=2))
-        logger.info("Station metrics after correction in written regularized output: %s", json.dumps(after_regularized, indent=2))
+        logger.info("Station metrics after correction in written regularized and normalized output: %s", json.dumps(after_regularized, indent=2))
     else:
         if args.write_weight:
             write_weight_raster(args.write_weight, grid, weights)
             logger.info("Wrote weight raster: %s", args.write_weight)
         conservative_out, ref, input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
-        out = apply_method_transform(apply_deblock(conservative_out, weights), weights, ref, input_band_array)
+        out = finalize_output(conservative_out, weights, ref, input_band_array)
         write_pollutant_raster(
             args.output_tif,
             grid,
@@ -1723,6 +1734,7 @@ def main(
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
                 "seamless_strength": args.seamless_strength,
+                "conservation_normalized": True,
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,
@@ -1732,7 +1744,7 @@ def main(
         if args.validate:
             stats = {
                 "conservative_allocation": validate_conservation(ref, input_band_array, conservative_out, grid, weights),
-                "written_regularized_output": validate_conservation(ref, input_band_array, out, grid, weights),
+                "written_regularized_normalized_output": validate_conservation(ref, input_band_array, out, grid, weights),
             }
 
     if args.groundtruth_csv and args.write_weight:

@@ -61,7 +61,7 @@ The JSON report includes:
 - background estimation settings and value;
 - station metrics before correction;
 - station metrics after correction before regularization;
-- station metrics after correction in the written regularized output;
+- station metrics after correction in the written regularized and normalized output;
 - station correction details;
 - conservation validation when `--validate` is used.
 
@@ -87,7 +87,7 @@ rmse
 When regularization is enabled, validation is reported for:
 
 - `conservative_allocation`: exact allocation before regularization.
-- `written_regularized_output`: final output after seamless/deblocking.
+- `written_regularized_normalized_output`: final output after seamless/deblocking and hard coarse-to-fine normalization.
 
 ## Station Metrics
 
@@ -131,4 +131,30 @@ Disable final deblocking:
 --deblock-sigma-m 0
 ```
 
-For strict comparison of conservative allocation only, use `--no-seamless --deblock-sigma-m 0` in both deterministic and AI runs.
+For a comparison of the allocation stage without visual regularization, use `--no-seamless --deblock-sigma-m 0` in both deterministic and AI runs.
+
+## CALPUFF Comparison Outputs
+
+`compare-calpuff` writes six files for each `--out-prefix`:
+
+```text
+<prefix>.model.tif       CALPUFF values converted to target units, background-added, and aligned to the reference grid
+<prefix>.satellite.tif   reference GeoTIFF values converted to target units
+<prefix>.difference.tif  model minus reference
+<prefix>.ratio.tif       model divided by reference, with NaN where the reference is zero or invalid
+<prefix>.stats.json      full machine-readable provenance and diagnostics
+<prefix>.stats.csv       flat metric/value statistics table
+```
+
+The GeoTIFF products use the reference raster grid, CRS, transform, dimensions, `float32` dtype, `NaN` nodata, and Deflate compression.
+
+The JSON report contains:
+
+- `calpuff`: input path, species, group, level, and aggregation method.
+- `calpuff_time_selection`: selected record times, overlap weights, or closest-record delta.
+- `geo`: `GEO.DAT` grid metadata from `GeoDATReader`.
+- `satellite`: reference path and band.
+- `time_check`: satellite/reference time source, CALPUFF comparison window, overlap seconds, overlap fraction, policy, and status.
+- `unit_conversion`: raw/converted CALPUFF stats, model-after-background stats, raw/converted satellite stats, scale/offset values, target unit, and formula.
+- `statistics`: valid-pixel count, min/max/mean/std, bias, MAE, RMSE, correlation, mean ratio, and median ratio.
+- `notes`: scientific caveats that should accompany the comparison.

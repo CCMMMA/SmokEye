@@ -85,6 +85,7 @@ mkdir -p output/getting_started/no_groundtruth
 mkdir -p output/getting_started/groundtruth
 mkdir -p output/getting_started/strict
 mkdir -p output/getting_started/metrics
+mkdir -p output/getting_started/calpuff
 mkdir -p output/getting_started/smokeye_use_case
 ```
 
@@ -285,9 +286,9 @@ rmse
 When default deblocking is enabled, validation is reported for two fields:
 
 - `conservative_allocation`: exact conservative allocation before regularization;
-- `written_regularized_output`: final written output after seamless/deblocking regularization.
+- `written_regularized_normalized_output`: final written output after seamless/deblocking regularization and hard coarse-to-fine normalization.
 
-The conservative allocation should generally have lower coarse-scale error because it is evaluated before smoothing.
+Both validation blocks should remain near numerical precision. A larger final error indicates a conservation or metadata problem rather than an expected smoothing effect.
 
 ## 7. Run AI Downscaling Without Ground Truth Correction
 
@@ -425,7 +426,7 @@ The default final deblocking settings are:
 --deblock-iterations 1
 ```
 
-Default deblocking improves visual continuity but relaxes strict per-source-pixel conservation in the final written raster. The `--validate` output makes this visible by reporting both exact conservative allocation and written regularized output.
+Default deblocking improves visual continuity. SmokEye then hard-normalizes the final raster so strict per-source-pixel conservation remains enforced; `--validate` reports both the exact conservative allocation and the final regularized, normalized output.
 
 SmokEye use case: deterministic downscaling with conservative allocation diagnostics, default seamless/deblocking regularization, `GEO.DAT` arrays already in upper/north-to-south order, and CALMET arrays in lower/south-to-north order:
 
@@ -443,11 +444,11 @@ python downscale_pollutant.py \
   --write-weight output/getting_started/smokeye_use_case/deterministic_weight_geodat_upper_calmet_lower.tif
 ```
 
-Use this pattern when `GEO.DAT` terrain or land-use diagnostics are already north-to-south in raster row order, while CALMET gridded records still need the default lower-origin flip. Keep `--validate` enabled so the output reports both the exact conservative allocation and the final deblocked raster.
+Use this pattern when `GEO.DAT` terrain or land-use diagnostics are already north-to-south in raster row order, while CALMET gridded records still need the default lower-origin flip. Keep `--validate` enabled so the output reports both the exact conservative allocation and the final deblocked, normalized raster.
 
-## 11. Run Without Deblocking For Strict Conservation Review
+## 11. Run Without Deblocking For Allocation-Only Review
 
-For strict scientific comparison of the conservative allocation stage, disable seamless recomposition and final deblocking:
+For scientific comparison of the conservative allocation stage without visual regularization, disable seamless recomposition and final deblocking:
 
 ```bash
 python downscale_pollutant.py \
@@ -519,7 +520,7 @@ python downscale_pollutant.py --method ai \
   --write-correction output/getting_started/strict/ai_correction_strict.tif
 ```
 
-The strict runs are useful for regression tests, method comparison, and conservation audits. The default deblocked runs are usually more suitable for visualization.
+These allocation-only runs are useful for regression tests and method comparison. The default deblocked runs are usually more suitable for visualization while remaining conservation-normalized.
 
 ## 12. Extract Quality Metrics From Station Reports
 
@@ -549,8 +550,8 @@ print(",".join([
     "rmse_after_regularized",
     "conservation_mae_conservative",
     "conservation_rmse_conservative",
-    "conservation_mae_written",
-    "conservation_rmse_written",
+    "conservation_mae_written_normalized",
+    "conservation_rmse_written_normalized",
 ]))
 
 for path in reports:
@@ -562,7 +563,7 @@ for path in reports:
     after_reg = data.get("station_metrics_after_correction_regularized", {})
     validation = data.get("conservation_validation", {})
     cons = validation.get("conservative_allocation", {})
-    written = validation.get("written_regularized_output", {})
+    written = validation.get("written_regularized_normalized_output", {})
     row = [
         str(path),
         str(data.get("method", "")),
@@ -608,8 +609,8 @@ columns = [
     "rmse_after_regularized",
     "conservation_mae_conservative",
     "conservation_rmse_conservative",
-    "conservation_mae_written",
-    "conservation_rmse_written",
+    "conservation_mae_written_normalized",
+    "conservation_rmse_written_normalized",
 ]
 print(",".join(columns))
 
@@ -622,7 +623,7 @@ for path in reports:
     after_reg = data.get("station_metrics_after_correction_regularized", {})
     validation = data.get("conservation_validation", {})
     cons = validation.get("conservative_allocation", {})
-    written = validation.get("written_regularized_output", {})
+    written = validation.get("written_regularized_normalized_output", {})
     print(",".join([
         str(path),
         str(data.get("method", "")),
@@ -680,7 +681,80 @@ PY
 
 These statistics are not a replacement for conservation validation, but they help detect obvious scale errors, nodata mistakes, extreme values, and unexpected shifts introduced by station correction or deblocking.
 
-## 14. Compare Deterministic And AI Outputs
+## 14. Compare CALPUFF Results With A Satellite Or Downscaled GeoTIFF
+
+Use `compare-calpuff` when CALPUFF `.con`, `.dry`, or `.wet` style gridded outputs must be compared with a satellite raster or with a SmokEye-downscaled GeoTIFF. This workflow does not downscale CALPUFF. It reads CALPUFF gridded records, uses `GEO.DAT` to place them on the model grid, aligns them to the reference GeoTIFF, applies explicit unit conversions, and writes pixel-wise comparison products.
+
+First inspect the CALPUFF records:
+
+```bash
+python downscale_pollutant.py compare-calpuff \
+  --calpuff calpuff.con \
+  --geo data/geo.dat \
+  --list-records
+```
+
+The listing reports available species, source groups, vertical levels, record times, and basic statistics. Use it to choose `--species`, `--group`, `--level`, and the comparison time window.
+
+Run a temporally matched comparison when the CALPUFF NO2 values are in arbitrary model units and the satellite or downscaled NO2 GeoTIFF is already in micrograms per cubic meter (`ug_m3`). In this example, `--calpuff-scale 0.001` converts the arbitrary CALPUFF values into `ug_m3`, `--calpuff-offset 0.0` applies no additive CALPUFF offset, and `--background 2.0` adds a documented `2.0 ug_m3` background after conversion. Because the satellite raster is already in `ug_m3`, its scale is `1.0` and its offset is `0.0`:
+
+```bash
+python downscale_pollutant.py compare-calpuff \
+  --calpuff calpuff.con \
+  --geo data/geo.dat \
+  --satellite output/getting_started/no_groundtruth/deterministic_no2.tif \
+  --species NO2 \
+  --group TOTAL \
+  --time-start 2025-02-25T07:00:00 \
+  --time-end 2025-02-25T08:00:00 \
+  --satellite-time-start 2025-02-25T07:00:00 \
+  --satellite-time-end 2025-02-25T08:00:00 \
+  --time-agg mean \
+  --time-selection closest \
+  --max-closest-time-delta-minutes 60 \
+  --calpuff-unit arbitrary \
+  --satellite-unit ug_m3 \
+  --target-unit ug_m3 \
+  --calpuff-scale 0.001 \
+  --calpuff-offset 0.0 \
+  --satellite-scale 1.0 \
+  --satellite-offset 0.0 \
+  --background 2.0 \
+  --out-prefix output/getting_started/calpuff/no2_total_vs_satellite
+```
+
+The conversion order is fixed and recorded in the JSON report:
+
+```text
+model = raw_CALPUFF * calpuff_scale + calpuff_offset + background
+satellite = raw_satellite * satellite_scale + satellite_offset
+```
+
+`background` is expressed in `--target-unit` and is added after CALPUFF conversion. SmokEye treats pollutant values as `ug_m3` by default, but it does not infer physical conversions between CALPUFF arbitrary/model units, near-surface concentrations, deposition fluxes, mixing ratios, and satellite column products. Supply scale/offset values only when their scientific basis is documented.
+
+For the command above, the compared arrays are therefore:
+
+```text
+model_NO2_ug_m3 = raw_CALPUFF_arbitrary * 0.001 + 0.0 + 2.0
+satellite_NO2_ug_m3 = raw_satellite_NO2_ug_m3 * 1.0 + 0.0
+```
+
+For the prefix above, the command writes:
+
+```text
+output/getting_started/calpuff/no2_total_vs_satellite.model.tif
+output/getting_started/calpuff/no2_total_vs_satellite.satellite.tif
+output/getting_started/calpuff/no2_total_vs_satellite.difference.tif
+output/getting_started/calpuff/no2_total_vs_satellite.ratio.tif
+output/getting_started/calpuff/no2_total_vs_satellite.stats.json
+output/getting_started/calpuff/no2_total_vs_satellite.stats.csv
+```
+
+The JSON report contains CALPUFF record selection, selected timestamp rule, GEO.DAT grid metadata, reference raster metadata, time-overlap diagnostics, unit-conversion diagnostics, pixel statistics, and scientific caveats. Keep `--time-overlap-policy strict` for production comparisons; use `warn` or `ignore` only for explicitly documented diagnostics. Use `--allow-untimed-satellite` only when missing reference time metadata is an intentional assumption.
+
+Interpret this comparison conservatively. Spatial alignment does not make CALPUFF and satellite products physically equivalent. Temporal mismatch, vertical representativeness, chemistry, deposition-versus-concentration differences, and background assumptions can dominate the result.
+
+## 15. Compare Deterministic And AI Outputs
 
 Create AI-minus-deterministic difference rasters:
 
@@ -731,7 +805,7 @@ Recommended visual checks:
 - Does station correction create isolated artifacts around stations?
 - Are deterministic and AI differences systematic, localized, or noisy?
 
-## 15. Interpret Results Conservatively
+## 16. Interpret Results Conservatively
 
 SmokEye creates a model-assisted fine-grid allocation product. It does not create new satellite information at the `GEO.DAT` resolution.
 
@@ -752,9 +826,10 @@ When reporting results academically, state:
 - whether seamless/deblocking regularization was used;
 - station metrics before and after correction;
 - conservation metrics for conservative and written outputs;
+- CALPUFF comparison time, unit-conversion, and background assumptions when CALPUFF diagnostics are reported;
 - known limitations, especially the difference between near-surface station measurements and satellite or model-layer quantities.
 
-## 16. Minimal Reproducible Command Matrix
+## 17. Minimal Reproducible Command Matrix
 
 The following table summarizes the core onboarding runs.
 

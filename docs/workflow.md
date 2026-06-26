@@ -26,7 +26,8 @@ Unified method dispatch lives in `smokeye/cli.py`. Shared readers, allocation, s
 6. Optionally estimate a background pollutant value from station measurements.
 7. Optionally build and apply a station correction field.
 8. Optionally apply seamless/deblocking regularization to reduce coarse-pixel seams.
-9. Write a single-band GeoTIFF and optional diagnostics.
+9. Hard-normalize the final field so each source pollutant pixel footprint aggregates back to the original coarse value.
+10. Write a single-band GeoTIFF and optional diagnostics.
 
 ## Temporal Model
 
@@ -72,12 +73,12 @@ Both methods also accept the same flags for pollutant selection, station correct
 
 ## Conservation Behavior
 
-The conservative allocation stage preserves the source field at coarse-pixel scale before optional regularization. When `--validate` is used, the command reports:
+The conservative allocation stage preserves the source field at coarse-pixel scale before optional regularization. After regularization, SmokEye normalizes the final field back to the original source-pixel means. When `--validate` is used, the command reports:
 
 - `conservative_allocation`: validation of the exact allocation before regularization.
-- `written_regularized_output`: validation of the final written output after seamless/deblocking regularization.
+- `written_regularized_normalized_output`: validation of the final written output after seamless/deblocking regularization and hard normalization.
 
-The second statistic may have larger differences because regularization is allowed to smooth coarse-pixel boundaries.
+Both statistics should remain near numerical precision for valid overlapping source pixels. A larger final error indicates a conservation or metadata problem, not an expected smoothing effect.
 
 ## When To Use Each Method
 

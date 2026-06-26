@@ -5,20 +5,26 @@ import argparse
 from datetime import datetime
 
 import numpy as np
+from affine import Affine
+from pyproj import CRS
 
 from smokeye.calpuff_reader import CalpuffGridRecord
 from smokeye.comparison import _stats, add_compare_calpuff_arguments, aggregate_records, select_records_for_window
 from smokeye.downscaler import (
+    GeoGrid,
     GeoDATReader,
+    RasterReference,
     calmet_stamp_delta_hours,
     calmet_stamp_from_window,
+    conservative_normalize_to_source,
     datetime_to_calmet_stamp,
     enforce_met_time_consistency,
+    validate_conservation,
     infer_calmet_stamp_format,
     orient_grid_array,
     parse_calmet_stamp,
 )
-from smokeye.temporal import time_check_report
+from smokeye.temporal import discover_time_from_tags, time_check_report
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
 
 
@@ -114,6 +120,14 @@ class ComparisonTests(unittest.TestCase):
         warn = time_check_report(start, end, datetime(2025, 2, 25, 9), datetime(2025, 2, 25, 10), "cli", policy="warn", min_fraction=0.95, allow_untimed_satellite=False)
         self.assertEqual(warn["time_consistency"], "warning")
 
+    def test_common_geotiff_time_tags_are_discovered(self):
+        start, end, source = discover_time_from_tags(
+            [{"time_coverage_start": "2025-02-25T07:00:00Z", "time_coverage_end": "2025-02-25T08:00:00Z"}],
+            None,
+        )
+        self.assertEqual(source, "geotiff_metadata")
+        self.assertEqual(start, datetime(2025, 2, 25, 7))
+        self.assertEqual(end, datetime(2025, 2, 25, 8))
 
     def test_aggregation_mean_weights_and_sum_prorates(self):
         records = [
@@ -170,6 +184,16 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(stats["n_valid"], 2)
         self.assertEqual(stats["bias_model_minus_satellite"], 2.5)
         self.assertEqual(stats["ratio_mean"], 2.0)
+
+    def test_conservative_normalization_restores_source_pixel_means(self):
+        crs = CRS.from_epsg(3857)
+        grid = GeoGrid(crs=crs, nx=4, ny=2, x0=0.0, y0=0.0, dx=1.0, dy=1.0)
+        ref = RasterReference(crs=crs, transform=Affine(2.0, 0.0, 0.0, 0.0, -2.0, 2.0), width=2, height=1)
+        coarse = np.array([[10.0, 20.0]], dtype=np.float32)
+        regularized = np.array([[1.0, 3.0, 1.0, 1.0], [1.0, 1.0, 5.0, 7.0]], dtype=np.float32)
+        normalized = conservative_normalize_to_source(ref, coarse, regularized, grid)
+        stats = validate_conservation(ref, coarse, normalized, grid, np.ones((2, 4), dtype=np.float32))
+        self.assertLess(stats["rmse"], 1.0e-5)
 
 
 if __name__ == "__main__":

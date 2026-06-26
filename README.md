@@ -18,7 +18,7 @@ The top-level script is a thin compatibility entry point. Shared implementation 
 
 ## What The Workflow Does
 
-The command does not simply resample the source raster. It treats each source pixel value as a coarse observational constraint and distributes it over the finer CALMET grid using a weight field. The allocation is conservative before optional seamless/deblocking regularization:
+The command does not simply resample the source raster. It treats each source pixel value as a coarse observational constraint and distributes it over the finer CALMET grid using a weight field. The allocation is conservative, optional seamless/deblocking regularization is applied, and the written raster is hard-normalized back to the original source-pixel means:
 
 ```text
 fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
@@ -26,7 +26,7 @@ fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
 
 where `w_i` is the fine-grid weight and `A_iP` is the overlap area between fine cell `i` and source pixel `P`.
 
-The deterministic method builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI method builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, and validation behavior. The diffusion method starts from the deterministic conservative field, generates positive residual fine-grid structure from an explicit checkpoint, and then hard-normalizes the result so each source pollutant pixel footprint aggregates back to the original coarse value.
+The deterministic method builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI method builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, validation, and final conservation-normalization behavior. The diffusion method starts from the deterministic conservative field, generates positive residual fine-grid structure from an explicit checkpoint, and uses the same hard normalization so each source pollutant pixel footprint aggregates back to the original coarse value.
 
 ## Installation
 
@@ -135,17 +135,30 @@ python downscale_pollutant.py compare-calpuff \
   --satellite-time-end 2025-02-25T08:00:00 \
   --time-agg mean \
   --time-selection closest \
-  --calpuff-unit ug_m3 \
+  --calpuff-unit arbitrary \
   --satellite-unit ug_m3 \
   --target-unit ug_m3 \
   --calpuff-scale 0.001 \
+  --calpuff-offset 0.0 \
+  --satellite-scale 1.0 \
+  --satellite-offset 0.0 \
   --background 2.0 \
   --out-prefix outputs/no2_total_vs_satellite
 ```
 
-The model compared against the satellite is `model = raw_CALPUFF * calpuff_scale + calpuff_offset + background`. The satellite/reference raster is converted independently as `satellite = raw_satellite * satellite_scale + satellite_offset`. Background is always expressed in the final target unit, `ug_m3` by default, and is added after CALPUFF unit conversion.
+The model compared against the satellite is:
 
-The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv` outputs using the supplied prefix. Use `--list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster. By default, mismatched or missing satellite/reference time metadata causes the command to fail, so temporally inconsistent comparisons are not produced accidentally. CALPUFF record selection defaults to `--time-selection closest`: overlapping records are preferred, and when none overlap the requested window SmokEye selects the closest available record by midpoint timestamp, breaks ties by file order, and records that deterministic choice in JSON diagnostics.
+```text
+model = raw_CALPUFF * calpuff_scale + calpuff_offset + background
+satellite = raw_satellite * satellite_scale + satellite_offset
+```
+
+`background` is always expressed in the final target unit, `ug_m3` by default, and is added after CALPUFF unit conversion. SmokEye does not guess conversions between arbitrary CALPUFF units, near-surface concentrations, deposition fluxes, mixing ratios, and satellite column amounts; those conversions must be supplied explicitly through scale/offset and documented in the JSON report.
+
+The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv` outputs using the supplied prefix. Use `--list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster.
+
+By default, the comparison is time-strict. SmokEye fails unless the CALPUFF comparison window and the satellite/reference validity window overlap by at least `--min-time-overlap-fraction` of the satellite window. Use `--time-overlap-policy warn` only for documented diagnostics, and `--allow-untimed-satellite` only when the missing satellite/reference time is an explicit assumption.
+
 
 ## Documentation
 
@@ -155,6 +168,7 @@ The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.
 - [Deterministic method](docs/deterministic-method.md)
 - [AI method](docs/ai-method.md)
 - [Diffusion method](docs/diffusion-method.md)
+- [CALPUFF comparison](docs/calpuff-comparison.md)
 - [Step-by-step comparison guide](docs/comparison-guide.md)
 - [Outputs, reports, and validation](docs/outputs-and-validation.md)
 
@@ -180,6 +194,7 @@ SmokEye/
 │   ├── deterministic-method.md
 │   ├── ai-method.md
 │   ├── diffusion-method.md
+│   ├── calpuff-comparison.md
 │   ├── comparison-guide.md
 │   └── outputs-and-validation.md
 ├── examples/
@@ -203,8 +218,8 @@ SmokEye/
 
 - A 200 m output grid does not mean the satellite observed the pollutant at 200 m resolution.
 - The output is a model-assisted allocation product.
-- Optional seamless/deblocking regularization improves visual continuity but relaxes strict per-source-pixel conservation.
-- The diffusion method reapplies hard coarse-to-fine normalization after residual generation, so the written diffusion raster is the conservation-enforced product.
+- Optional seamless/deblocking regularization improves visual continuity; the final written raster is then normalized so source-pixel conservation remains enforced.
+- All methods write conservation-enforced products; validation reports both the initial conservative allocation and the final regularized, normalized output.
 - Station measurements are near-surface values, while some satellite products are column quantities. Station correction should be interpreted carefully.
 - For production use, review the weight logic for the target pollutant, emissions regime, meteorology, and local land-use classes.
 

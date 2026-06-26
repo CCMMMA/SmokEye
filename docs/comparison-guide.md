@@ -127,11 +127,11 @@ Compare:
 - `conservative_allocation.bias`
 - `conservative_allocation.mae`
 - `conservative_allocation.rmse`
-- `written_regularized_output.bias`
-- `written_regularized_output.mae`
-- `written_regularized_output.rmse`
+- `written_regularized_normalized_output.bias`
+- `written_regularized_normalized_output.mae`
+- `written_regularized_normalized_output.rmse`
 
-The conservative allocation block should usually show smaller errors than the written regularized output because seamless/deblocking modifies the final raster.
+Both blocks should be near numerical precision. The final block confirms that seamless/deblocking and method-specific transforms were normalized back to the source pollutant pixels before writing.
 
 ## 6. Compare Station Reports
 
@@ -272,8 +272,8 @@ station_mae_after_regularized
 station_rmse_after_regularized
 conservation_mae_conservative
 conservation_rmse_conservative
-conservation_mae_written
-conservation_rmse_written
+conservation_mae_written_normalized
+conservation_rmse_written_normalized
 visual_notes
 ```
 
