@@ -36,6 +36,7 @@ import struct
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -52,6 +53,19 @@ from smokeye.logging_utils import configure_cli_logging
 
 
 logger = logging.getLogger(__name__)
+
+
+CALMET_STAMP_FORMATS = ("auto", "yyyymmddhh", "yyyydddhhh")
+STATIC_CALMET_FIELDS = {
+    "z0",
+    "ilandu",
+    "elev",
+    "xlai",
+    "terrain",
+    "landuse",
+    "elevation_calmet",
+    "landuse_calmet",
+}
 
 
 @dataclass(frozen=True)
@@ -323,6 +337,7 @@ class MetReader:
         met_npz: Optional[Path] = None,
         selector: str = "last",
         stamp: Optional[int] = None,
+        stamp_format: str = "yyyymmddhh",
         allow_no_met: bool = False,
         array_origin: str = "lower",
     ):
@@ -331,12 +346,14 @@ class MetReader:
         self.met_npz = Path(met_npz) if met_npz else None
         self.selector = selector
         self.stamp = stamp
+        self.stamp_format = stamp_format
         self.allow_no_met = allow_no_met
         self.array_origin = array_origin
         self.selection_report: Dict[str, object] = {
             "source": "none",
             "selector": selector,
             "requested_stamp": stamp,
+            "stamp_format": stamp_format,
             "array_origin": array_origin,
             "fields": {},
         }
@@ -372,6 +389,7 @@ class MetReader:
             "source": "npz",
             "selector": "preselected",
             "requested_stamp": self.stamp,
+            "stamp_format": self.stamp_format,
             "array_origin": "upper",
             "fields": {name: {"selection": "preselected", "stamp": None} for name in sorted(met.keys())},
         }
@@ -384,12 +402,24 @@ class MetReader:
             "available_stamps": [int(r[0]) for r in records],
             "selector": self.selector,
             "requested_stamp": self.stamp,
+            "stamp_format": self.stamp_format,
             "selected_stamp": None,
             "stamp_delta": None,
         }
         if self.stamp is not None:
-            selected_stamp, arr = min(records, key=lambda r: (abs(r[0] - self.stamp), r[0]))
-            info.update({"selector": "closest", "selected_stamp": int(selected_stamp), "stamp_delta": int(abs(selected_stamp - self.stamp))})
+            selected_stamp, arr = min(
+                records,
+                key=lambda r: (
+                    calmet_stamp_delta_hours(r[0], self.stamp, self.stamp_format)
+                    if int(r[0]) > 0
+                    else math.inf,
+                    r[0],
+                ),
+            )
+            delta = None
+            if int(selected_stamp) > 0:
+                delta = calmet_stamp_delta_hours(selected_stamp, self.stamp, self.stamp_format)
+            info.update({"selector": "closest", "selected_stamp": int(selected_stamp), "stamp_delta": delta})
             self.selection_report["fields"][field_name] = info
             return arr
         if self.selector == "first":
@@ -448,6 +478,7 @@ class MetReader:
             "source": str(path),
             "selector": "closest" if self.stamp is not None else self.selector,
             "requested_stamp": self.stamp,
+            "stamp_format": self.stamp_format,
             "array_origin": self.array_origin,
             "fields": {},
         }
@@ -501,7 +532,7 @@ class MetReader:
         raise ValueError("Could not determine Fortran record endian/order")
 
     @staticmethod
-    def inspect(path: Path, limit: int = 80) -> List[dict]:
+    def inspect(path: Path, limit: int = 80, stamp_format: str = "auto") -> List[dict]:
         endian = MetReader._detect_fortran_endian(path)
         rows = []
         with path.open("rb") as f:
@@ -519,9 +550,39 @@ class MetReader:
                     break
                 label = payload[:8].decode("ascii", errors="ignore").strip()
                 if reclen >= 1000 or label in {"ZI", "TEMPK", "USTAR"} or label.startswith(("U-LEV", "V-LEV")):
-                    rows.append({"record": i, "length": reclen, "label": label})
+                    stamp = None
+                    if reclen >= 12:
+                        try:
+                            stamp = struct.unpack(endian + "i", payload[8:12])[0]
+                        except Exception:
+                            stamp = None
+
+                    rows.append({
+                        "record": i,
+                        "length": reclen,
+                        "label": label,
+                        "stamp": stamp,
+                    })
                 i += 1
+        resolved_format = stamp_format
+        if stamp_format == "auto":
+            resolved_format = infer_calmet_stamp_format((row.get("stamp") for row in rows if row.get("stamp"))) if any(row.get("stamp") for row in rows) else None
+        for row in rows:
+            stamp = row.get("stamp")
+            if stamp is None or int(stamp) == 0 or resolved_format is None:
+                row["stamp_format"] = None
+                row["datetime"] = None
+                continue
+            row["stamp_format"] = resolved_format
+            try:
+                row["datetime"] = parse_calmet_stamp(int(stamp), resolved_format).isoformat()
+            except ValueError:
+                row["datetime"] = None
         return rows
+
+    @staticmethod
+    def available_stamps(path: Path) -> List[int]:
+        return [int(row["stamp"]) for row in MetReader.inspect(path, stamp_format="yyyymmddhh") if row.get("stamp")]
 
 
 def robust01(arr: np.ndarray) -> np.ndarray:
@@ -1195,26 +1256,117 @@ def discover_raster_time(path: Path, band: int, instant_duration_minutes: Option
         return discover_time_from_tags((src.tags(), src.tags(band)), instant_duration_minutes)
 
 
-def datetime_to_calmet_stamp(dt) -> int:
-    return int(dt.strftime("%Y%m%d%H"))
+def datetime_to_calmet_stamp(dt, stamp_format: str = "yyyymmddhh") -> int:
+    if stamp_format == "yyyymmddhh":
+        return int(dt.strftime("%Y%m%d%H"))
+    if stamp_format == "yyyydddhhh":
+        return int(f"{dt.year:04d}{dt.timetuple().tm_yday:03d}{dt.hour:02d}")
+    raise ValueError(f"Unsupported CALMET stamp format: {stamp_format}")
 
 
-def calmet_stamp_from_window(start, end) -> Optional[int]:
+def parse_calmet_stamp(stamp: int, stamp_format: str) -> datetime:
+    text = str(int(stamp))
+    if stamp_format == "yyyymmddhh":
+        if len(text) != 10:
+            raise ValueError(f"Invalid yyyymmddhh stamp length: {stamp}")
+        year = int(text[0:4])
+        month = int(text[4:6])
+        day = int(text[6:8])
+        hour = int(text[8:10])
+        if not 0 <= hour <= 23:
+            raise ValueError(f"Invalid hour in yyyymmddhh stamp: {stamp}")
+        return datetime(year, month, day, hour)
+    if stamp_format == "yyyydddhhh":
+        if len(text) not in (9, 10):
+            raise ValueError(f"Invalid yyyydddhhh stamp length: {stamp}")
+        year = int(text[0:4])
+        jday = int(text[4:7])
+        hour = int(text[7:])
+        if not 1 <= jday <= 366:
+            raise ValueError(f"Invalid Julian day in yyyydddhhh stamp: {stamp}")
+        if not 0 <= hour <= 999:
+            raise ValueError(f"Invalid hour in yyyydddhhh stamp: {stamp}")
+        return datetime(year, 1, 1) + timedelta(days=jday - 1, hours=hour)
+    raise ValueError(f"Unsupported CALMET stamp format: {stamp_format}")
+
+
+def infer_calmet_stamp_format(stamps: Iterable[int]) -> str:
+    nonzero = [int(s) for s in stamps if s is not None and int(s) > 0]
+    if not nonzero:
+        raise ValueError("Cannot infer CALMET stamp format: no nonzero stamps found")
+    candidates = []
+    for fmt in ("yyyydddhhh", "yyyymmddhh"):
+        parsed_ok = 0
+        clock_hour_ok = 0
+        for stamp in nonzero[:200]:
+            try:
+                parse_calmet_stamp(stamp, fmt)
+                parsed_ok += 1
+                text = str(int(stamp))
+                hour = int(text[8:10] if fmt == "yyyymmddhh" else text[7:])
+                if 0 <= hour <= 23:
+                    clock_hour_ok += 1
+            except ValueError:
+                pass
+        candidates.append((parsed_ok, clock_hour_ok, fmt))
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    best_count, _, best_fmt = candidates[0]
+    if best_count == 0:
+        raise ValueError(
+            "Cannot infer CALMET stamp format from available stamps. "
+            "Use --calmet-stamp-format yyyymmddhh or yyyydddhhh."
+        )
+    return best_fmt
+
+
+def calmet_stamp_delta_hours(selected_stamp: int, requested_stamp: int, stamp_format: str) -> float:
+    selected_dt = parse_calmet_stamp(selected_stamp, stamp_format)
+    requested_dt = parse_calmet_stamp(requested_stamp, stamp_format)
+    return abs((selected_dt - requested_dt).total_seconds()) / 3600.0
+
+
+def is_static_calmet_field(field_name: str, selected_stamp: Optional[int]) -> bool:
+    if selected_stamp is None:
+        return False
+    return int(selected_stamp) == 0 and field_name.lower() in STATIC_CALMET_FIELDS
+
+
+def calmet_stamp_from_window(start, end, stamp_format: str = "yyyymmddhh") -> Optional[int]:
     if start is None or end is None:
         return None
     midpoint = start + (end - start) / 2
-    return datetime_to_calmet_stamp(midpoint)
+    return datetime_to_calmet_stamp(midpoint, stamp_format)
 
 
 def enforce_met_time_consistency(selection_report: dict, max_stamp_delta: Optional[int]) -> None:
     if max_stamp_delta is None:
         return
+    stamp_format = selection_report.get("stamp_format") or "yyyymmddhh"
     for field, info in selection_report.get("fields", {}).items():
-        delta = info.get("stamp_delta") if isinstance(info, dict) else None
-        if delta is not None and int(delta) > max_stamp_delta:
+        if not isinstance(info, dict):
+            continue
+        selected_stamp = info.get("selected_stamp")
+        requested_stamp = info.get("requested_stamp")
+        if selected_stamp is None or requested_stamp is None or selected_stamp == "mean":
+            continue
+        if is_static_calmet_field(field, int(selected_stamp)):
+            continue
+        if int(selected_stamp) == 0:
             raise ValueError(
-                f"CALMET field {field} selected stamp {info.get('selected_stamp')} is delta {delta} from requested "
-                f"stamp {info.get('requested_stamp')}, exceeding --max-calmet-stamp-delta {max_stamp_delta}"
+                f"CALMET field {field} selected stamp 0 but is not registered as a static field. "
+                "Use --inspect-calmet to verify CALMET records."
+            )
+        delta = calmet_stamp_delta_hours(int(selected_stamp), int(requested_stamp), stamp_format)
+        info["stamp_delta"] = delta
+        if delta > max_stamp_delta:
+            selected_dt = parse_calmet_stamp(int(selected_stamp), stamp_format)
+            requested_dt = parse_calmet_stamp(int(requested_stamp), stamp_format)
+            raise ValueError(
+                f"CALMET field {field} selected stamp {selected_stamp} "
+                f"({selected_dt.isoformat()}, format {stamp_format}) is {delta:.2f} h from requested stamp "
+                f"{requested_stamp} ({requested_dt.isoformat()}), exceeding --max-calmet-stamp-delta "
+                f"{max_stamp_delta}. Use --inspect-calmet to list available stamps, --calmet-stamp-format "
+                "to override timestamp encoding, or --calmet-stamp to select a specific CALMET time."
             )
 
 
@@ -1278,11 +1430,12 @@ def main(
     parser.add_argument("--write-correction", type=Path, default=None, help="Optional GeoTIFF of station multiplicative correction field.")
     parser.add_argument("--calmet-selector", choices=["first", "last", "mean"], default="last")
     parser.add_argument("--calmet-stamp", type=int, default=None, help="Select nearest CALMET integer timestamp.")
+    parser.add_argument("--calmet-stamp-format", choices=CALMET_STAMP_FORMATS, default="auto", help="CALMET/CMET timestamp encoding: yyyymmddhh, yyyydddhhh, or auto to infer from nonzero file stamps.")
     parser.add_argument("--satellite-time-start", default=None, help="Optional ISO timestamp for the pollutant raster validity-window start.")
     parser.add_argument("--satellite-time-end", default=None, help="Optional ISO timestamp for the pollutant raster validity-window end.")
     parser.add_argument("--satellite-instant-duration-minutes", type=float, default=None, help="Expand an instant pollutant raster timestamp into a centered validity window.")
     parser.add_argument("--allow-untimed-satellite", action="store_true", help="Allow downscaling when the pollutant raster has no usable timestamp metadata and no time was supplied.")
-    parser.add_argument("--max-calmet-stamp-delta", type=int, default=1, help="Maximum allowed integer delta between requested and selected CALMET stamps when selecting closest weather data. Use a negative value to disable.")
+    parser.add_argument("--max-calmet-stamp-delta", type=int, default=1, help="Maximum allowed hour delta between requested and selected CALMET stamps when selecting closest weather data. Use a negative value to disable.")
     parser.add_argument("--allow-no-met", action="store_true", help="Continue with terrain/land-use weights if meteorology cannot be read.")
     parser.add_argument("--validate", action="store_true", help="Print coarse-scale conservation validation statistics.")
     parser.add_argument("--write-weight", type=Path, default=None, help="Optional output GeoTIFF for the final dynamic weight field.")
@@ -1318,7 +1471,7 @@ def main(
         return
 
     if args.inspect_calmet:
-        logger.info(json.dumps(MetReader.inspect(args.inspect_calmet), indent=2))
+        logger.info(json.dumps(MetReader.inspect(args.inspect_calmet, stamp_format=args.calmet_stamp_format), indent=2))
         return
 
     if args.inspect_groundtruth:
@@ -1355,11 +1508,18 @@ def main(
     if (sat_start is None or sat_end is None) and not args.allow_untimed_satellite:
         parser.error("input pollutant raster has no usable timestamp; pass --satellite-time-start/--satellite-time-end or --allow-untimed-satellite")
 
+    calmet_stamp_format = args.calmet_stamp_format
+    if calmet_stamp_format == "auto":
+        if args.met_npz or (args.calmet_dat and args.calmet_dat.suffix.lower() == ".npz"):
+            calmet_stamp_format = "yyyymmddhh"
+        else:
+            calmet_stamp_format = infer_calmet_stamp_format(MetReader.available_stamps(args.calmet_dat))
+
     effective_calmet_stamp = args.calmet_stamp
     calmet_stamp_source = "cli" if effective_calmet_stamp is not None else "none"
     if effective_calmet_stamp is None and sat_start is not None and sat_end is not None and args.calmet_selector != "mean":
-        effective_calmet_stamp = calmet_stamp_from_window(sat_start, sat_end)
-        calmet_stamp_source = "satellite_midpoint_YYYYMMDDHH"
+        effective_calmet_stamp = calmet_stamp_from_window(sat_start, sat_end, calmet_stamp_format)
+        calmet_stamp_source = f"satellite_midpoint_{calmet_stamp_format}"
 
     grid = GeoDATReader(args.geodat, args.geodat_sidecar, array_origin=args.geodat_array_origin).read()
     met_reader = MetReader(
@@ -1368,6 +1528,7 @@ def main(
         met_npz=args.met_npz,
         selector=args.calmet_selector,
         stamp=effective_calmet_stamp,
+        stamp_format=calmet_stamp_format,
         allow_no_met=args.allow_no_met,
         array_origin=args.calmet_array_origin,
     )
@@ -1391,6 +1552,7 @@ def main(
             "satellite_time_end": iso(sat_end),
             "calmet_requested_stamp": effective_calmet_stamp,
             "calmet_stamp_source": calmet_stamp_source,
+            "calmet_stamp_format": calmet_stamp_format,
             "max_calmet_stamp_delta": max_calmet_delta,
             "meteorology_selection": met_reader.selection_report,
         },

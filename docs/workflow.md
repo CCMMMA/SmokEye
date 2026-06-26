@@ -44,9 +44,10 @@ For CALMET/CMET binary inputs, SmokEye reads all supported records for each mete
 
 - `--calmet-selector mean` uses the cellwise mean across all supported records for each field;
 - `--calmet-stamp INTEGER` overrides the satellite-derived target stamp and chooses the record whose CALMET integer timestamp is nearest to `INTEGER`;
-- `--max-calmet-stamp-delta INTEGER` fails the command when the nearest available CALMET record is not close enough.
+- `--calmet-stamp-format auto|yyyymmddhh|yyyydddhhh` controls how CALMET stamps are decoded;
+- `--max-calmet-stamp-delta INTEGER` fails the command when the nearest available CALMET record is not close enough in hours.
 
-The CALMET timestamp is read from the 4-byte integer following the 8-byte field label in each supported gridded record. For automatic selection, SmokEye converts the satellite/reference midpoint to a deterministic `YYYYMMDDHH` target stamp and records the chosen meteorology stamps in output diagnostics. Record selection is performed independently for each meteorological field, so datasets with missing fields at some times should be inspected carefully.
+The CALMET timestamp is read from the 4-byte integer following the 8-byte field label in each supported gridded record. For automatic selection, SmokEye infers whether nonzero file stamps are calendar `YYYYMMDDHH` values or CALMET/CMET `YYYYJJJHHH` values, converts the satellite/reference midpoint to the resolved format, and records the chosen meteorology stamps in output diagnostics. Static records with stamp `0`, such as roughness, land use, elevation, or LAI, are accepted as static fields and are not compared against the requested time. Record selection is performed independently for each meteorological field, so datasets with missing fields at some times should be inspected carefully.
 
 ## Grid Array Orientation
 

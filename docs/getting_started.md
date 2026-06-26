@@ -151,10 +151,11 @@ For CALMET/CMET binary files, the time behavior is controlled by:
 ```bash
 --calmet-selector mean
 --calmet-stamp INTEGER
+--calmet-stamp-format auto
 --max-calmet-stamp-delta INTEGER
 ```
 
-When the pollutant raster has a known time window and `--calmet-stamp` is not supplied, SmokEye derives a target `YYYYMMDDHH` CALMET stamp from the satellite midpoint and chooses the closest available record for each meteorological variable. `--max-calmet-stamp-delta` limits how far the selected CALMET stamp may be from the requested stamp. `--calmet-stamp` overrides the derived stamp. `--calmet-selector mean` computes a cellwise mean over supported records and is useful only when the pollutant raster is itself a temporal average over the same period.
+When the pollutant raster has a known time window and `--calmet-stamp` is not supplied, SmokEye derives a target CALMET stamp from the satellite midpoint and chooses the closest available record for each meteorological variable. `--calmet-stamp-format auto` infers whether nonzero file stamps are `YYYYMMDDHH` values like `2024062811` or `YYYYJJJHHH` values like `202418011` for 2024 day 180 hour 11. `--max-calmet-stamp-delta` limits the selected CALMET time delta in hours. `--calmet-stamp` overrides the derived stamp, and `--calmet-selector mean` computes a cellwise mean over supported records when the pollutant raster is itself a temporal average over the same period.
 
 For example, if the CALMET producer documents that stamp `2024062811` corresponds to the intended analysis hour, run:
 
@@ -167,6 +168,22 @@ python downscale_pollutant.py \
   --pollutant NO2 \
   --input-band 1 \
   --calmet-stamp 2024062811 \
+  --validate
+```
+
+For CALMET/CMET files that use Julian-day stamps, the same hour can be selected explicitly with:
+
+```bash
+python downscale_pollutant.py \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
+  data/cmet.dat \
+  data/geo.dat \
+  output/getting_started/no_groundtruth/deterministic_no2_julian_stamp.tif \
+  --pollutant NO2 \
+  --input-band 1 \
+  --calmet-stamp-format yyyydddhhh \
+  --calmet-stamp 202418011 \
+  --max-calmet-stamp-delta 0 \
   --validate
 ```
 

@@ -77,7 +77,7 @@ Available selector modes are:
 --calmet-selector mean
 ```
 
-For normal downscaling, SmokEye uses the pollutant raster timestamp to derive a target `YYYYMMDDHH` CALMET stamp and selects the closest available weather record for each field. Use `first` or `last` only with `--allow-untimed-satellite` or already trimmed CALMET files where record order is the documented time-selection rule. Use `mean` when the pollutant raster represents a time average and the meteorological influence should also be averaged over the available records.
+For normal downscaling, SmokEye uses the pollutant raster timestamp to derive a target CALMET stamp in the selected or inferred stamp format and selects the closest available weather record for each field. Use `first` or `last` only with `--allow-untimed-satellite` or already trimmed CALMET files where record order is the documented time-selection rule. Use `mean` when the pollutant raster represents a time average and the meteorological influence should also be averaged over the available records.
 
 If the CALMET integer timestamp for the desired analysis time is known, select the nearest record with:
 
@@ -85,9 +85,19 @@ If the CALMET integer timestamp for the desired analysis time is known, select t
 --calmet-stamp 2024062811
 ```
 
-The integer is interpreted only as a CALMET record stamp. SmokEye does not parse it as a calendar date, does not infer time zones, and does not compare it with dates embedded in filenames.
+CALMET/CMET files commonly use one of two timestamp encodings:
 
-Use `--max-calmet-stamp-delta` to limit how far the nearest available CALMET stamp may be from the requested or satellite-derived stamp. Untimed pollutant rasters fail by default; use `--allow-untimed-satellite` only for a documented diagnostic or preselected input package.
+```bash
+--calmet-stamp-format auto
+--calmet-stamp-format yyyymmddhh
+--calmet-stamp-format yyyydddhhh
+```
+
+`auto` is the default and infers the encoding from available nonzero CALMET stamps. `yyyymmddhh` represents calendar stamps such as `2024062811`. `yyyydddhhh` represents year, Julian day, and an hour field; for example, `202418011` decodes to `2024-06-28T11:00:00`. SmokEye accepts both the observed 9-digit form and 10-digit elapsed-hour variants. Use `--inspect-calmet` to list raw stamps, decoded datetimes, and the inferred format.
+
+The integer is interpreted as a CALMET record stamp in the selected format. SmokEye does not infer time zones from CALMET stamps and does not compare them with dates embedded in filenames.
+
+Use `--max-calmet-stamp-delta` to limit how far, in hours, the nearest available CALMET stamp may be from the requested or satellite-derived stamp. Static CALMET fields with stamp `0`, such as roughness, land use, elevation, and LAI records, are accepted as static metadata rather than rejected as time mismatches. Untimed pollutant rasters fail by default; use `--allow-untimed-satellite` only for a documented diagnostic or preselected input package.
 
 For `.npz` meteorology, there is no internal time selection. The arrays are assumed to have already been selected or averaged for the intended pollutant analysis time.
 

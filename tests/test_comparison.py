@@ -8,7 +8,16 @@ import numpy as np
 
 from smokeye.calpuff_reader import CalpuffGridRecord
 from smokeye.comparison import _stats, add_compare_calpuff_arguments, aggregate_records, select_records_for_window
-from smokeye.downscaler import GeoDATReader, calmet_stamp_from_window, enforce_met_time_consistency, orient_grid_array
+from smokeye.downscaler import (
+    GeoDATReader,
+    calmet_stamp_delta_hours,
+    calmet_stamp_from_window,
+    datetime_to_calmet_stamp,
+    enforce_met_time_consistency,
+    infer_calmet_stamp_format,
+    orient_grid_array,
+    parse_calmet_stamp,
+)
 from smokeye.temporal import time_check_report
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
 
@@ -136,9 +145,18 @@ class ComparisonTests(unittest.TestCase):
             calmet_stamp_from_window(datetime(2025, 2, 25, 7), datetime(2025, 2, 25, 8)),
             2025022507,
         )
+        self.assertEqual(datetime_to_calmet_stamp(datetime(2024, 6, 28, 11), "yyyymmddhh"), 2024062811)
+        self.assertEqual(datetime_to_calmet_stamp(datetime(2024, 6, 28, 11), "yyyydddhhh"), 202418011)
+        self.assertEqual(parse_calmet_stamp(202418011, "yyyydddhhh"), datetime(2024, 6, 28, 11))
+        self.assertEqual(parse_calmet_stamp(202406000, "yyyydddhhh"), datetime(2024, 2, 29, 0))
+        self.assertEqual(infer_calmet_stamp_format([0, 202418000, 202418011]), "yyyydddhhh")
+        self.assertEqual(infer_calmet_stamp_format([2024062811, 2024062812]), "yyyymmddhh")
+        self.assertEqual(calmet_stamp_delta_hours(202418016, 202418011, "yyyydddhhh"), 5.0)
         report = {
+            "stamp_format": "yyyymmddhh",
             "fields": {
                 "ws10": {"selected_stamp": 2025022508, "requested_stamp": 2025022507, "stamp_delta": 1},
+                "z0": {"selected_stamp": 0, "requested_stamp": 2025022507, "stamp_delta": None},
             }
         }
         enforce_met_time_consistency(report, 1)
