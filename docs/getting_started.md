@@ -85,6 +85,7 @@ mkdir -p output/getting_started/no_groundtruth
 mkdir -p output/getting_started/groundtruth
 mkdir -p output/getting_started/strict
 mkdir -p output/getting_started/metrics
+mkdir -p output/getting_started/smokeye_use_case
 ```
 
 ## 3. Inspect The Inputs Before Downscaling
@@ -406,6 +407,24 @@ The default final deblocking settings are:
 ```
 
 Default deblocking improves visual continuity but relaxes strict per-source-pixel conservation in the final written raster. The `--validate` output makes this visible by reporting both exact conservative allocation and written regularized output.
+
+SmokEye use case: deterministic downscaling with conservative allocation diagnostics, default seamless/deblocking regularization, `GEO.DAT` arrays already in upper/north-to-south order, and CALMET arrays in lower/south-to-north order:
+
+```bash
+python downscale_pollutant.py \
+  data/S5P_NO2_000_20240628T111519UTC_orbit-unknown.tif \
+  data/cmet.dat \
+  data/geo.dat \
+  output/getting_started/smokeye_use_case/deterministic_no2_geodat_upper_calmet_lower.tif \
+  --pollutant NO2 \
+  --input-band 1 \
+  --geodat-array-origin upper \
+  --calmet-array-origin lower \
+  --validate \
+  --write-weight output/getting_started/smokeye_use_case/deterministic_weight_geodat_upper_calmet_lower.tif
+```
+
+Use this pattern when `GEO.DAT` terrain or land-use diagnostics are already north-to-south in raster row order, while CALMET gridded records still need the default lower-origin flip. Keep `--validate` enabled so the output reports both the exact conservative allocation and the final deblocked raster.
 
 ## 11. Run Without Deblocking For Strict Conservation Review
 
