@@ -428,6 +428,14 @@ The default final deblocking settings are:
 
 Default deblocking improves visual continuity. SmokEye then hard-normalizes the final raster so strict per-source-pixel conservation remains enforced; `--validate` reports both the exact conservative allocation and the final regularized, normalized output.
 
+If the final hard normalization makes coarse source-pixel seams too visible for a visualization or diagnostic product, relax it explicitly:
+
+```bash
+--conservation-relaxation 0.5
+```
+
+`--conservation-relaxation 0` is the default strict mode. `--conservation-relaxation 1` writes the regularized field without final source-pixel rescaling, and intermediate values blend the strict and relaxed fields. Nonzero values intentionally relax the coarse-to-fine conservation invariant, so keep `--validate` enabled and record the chosen value with the output.
+
 SmokEye use case: deterministic downscaling with conservative allocation diagnostics, default seamless/deblocking regularization, `GEO.DAT` arrays already in upper/north-to-south order, and CALMET arrays in lower/south-to-north order:
 
 ```bash

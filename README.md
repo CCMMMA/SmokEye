@@ -18,7 +18,7 @@ The top-level script is a thin compatibility entry point. Shared implementation 
 
 ## What The Workflow Does
 
-The command does not simply resample the source raster. It treats each source pixel value as a coarse observational constraint and distributes it over the finer CALMET grid using a weight field. The allocation is conservative, optional seamless/deblocking regularization is applied, and the written raster is hard-normalized back to the original source-pixel means:
+The command does not simply resample the source raster. It treats each source pixel value as a coarse observational constraint and distributes it over the finer CALMET grid using a weight field. The allocation is conservative, optional seamless/deblocking regularization is applied, and by default the written raster is hard-normalized back to the original source-pixel means:
 
 ```text
 fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
@@ -27,6 +27,8 @@ fine_i = source_P * w_i * sum(A_iP) / sum(w_i * A_iP)
 where `w_i` is the fine-grid weight and `A_iP` is the overlap area between fine cell `i` and source pixel `P`.
 
 The deterministic method builds `w_i` from explicit terrain, land-use, and meteorological rules. The AI method builds `w_i` using a deterministic machine-learning model while preserving the same downstream allocation, station-correction, reporting, validation, and final conservation-normalization behavior. The diffusion method starts from the deterministic conservative field, generates positive residual fine-grid structure from an explicit checkpoint, and uses the same hard normalization so each source pollutant pixel footprint aggregates back to the original coarse value.
+
+For visualization or diagnostic products where visible coarse-pixel seams are more important than exact coarse-to-fine conservation, use `--conservation-relaxation VALUE` with `VALUE` between `0` and `1`. The default `0` keeps strict hard normalization. A value of `1` writes the regularized field without final source-pixel rescaling, and intermediate values blend the strict and relaxed fields.
 
 ## Installation
 

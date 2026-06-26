@@ -1437,6 +1437,7 @@ def main(
     parser.add_argument("--allow-no-met", action="store_true", help="Continue with terrain/land-use weights if meteorology cannot be read.")
     parser.add_argument("--validate", action="store_true", help="Print coarse-scale conservation validation statistics.")
     parser.add_argument("--write-weight", type=Path, default=None, help="Optional output GeoTIFF for the final dynamic weight field.")
+    parser.add_argument("--conservation-relaxation", type=float, default=0.0, help="Relax final coarse-to-fine conservation normalization, 0..1. 0 is strict hard normalization; 1 writes the regularized field without final source-pixel rescaling.")
     parser.add_argument("--deblock-sigma-m", type=float, default=400.0, help="Anti-blocking Gaussian smoothing sigma in meters applied to the final fine field. Use 0 to disable.")
     parser.add_argument("--deblock-strength", type=float, default=0.75, help="Blend strength for anti-blocking smoothing, 0..1.")
     parser.add_argument("--deblock-iterations", type=int, default=1, help="Number of anti-blocking smoothing iterations.")
@@ -1494,6 +1495,9 @@ def main(
     missing = [name for name in ["input_tif", "calmet_dat", "geodat", "output_tif"] if getattr(args, name) is None]
     if missing:
         parser.error("missing required positional arguments: " + ", ".join(missing))
+
+    if not np.isfinite(args.conservation_relaxation) or args.conservation_relaxation < 0.0 or args.conservation_relaxation > 1.0:
+        parser.error("--conservation-relaxation must be a finite value in the range 0..1")
 
     sat_start = parse_datetime(args.satellite_time_start)
     sat_end = parse_datetime(args.satellite_time_end)
@@ -1565,8 +1569,9 @@ def main(
             "strength": args.deblock_strength,
             "iterations": args.deblock_iterations,
             "mean_preserve": not args.no_deblock_mean_preserve,
-            "conservation_normalized_after_regularization": True,
-            "note": "Anti-blocking is applied as regularization, then the written output is hard-normalized back to each source pollutant pixel."
+            "conservation_normalized_after_regularization": args.conservation_relaxation <= 0.0,
+            "conservation_relaxation": args.conservation_relaxation,
+            "note": "Anti-blocking is applied as regularization. By default the written output is hard-normalized back to each source pollutant pixel; --conservation-relaxation blends toward the unnormalized regularized field."
         },
         "seamless": {
             "enabled": args.seamless,
@@ -1575,8 +1580,9 @@ def main(
             "strength": args.seamless_strength,
             "anomaly_min": args.seamless_anomaly_min,
             "anomaly_max": args.seamless_anomaly_max,
-            "conservation_normalized_after_regularization": True,
-            "note": "Seamless recomposition uses a smooth baseline multiplied by high-resolution dynamic anomalies; the written output is then hard-normalized back to each source pollutant pixel."
+            "conservation_normalized_after_regularization": args.conservation_relaxation <= 0.0,
+            "conservation_relaxation": args.conservation_relaxation,
+            "note": "Seamless recomposition uses a smooth baseline multiplied by high-resolution dynamic anomalies. By default the written output is hard-normalized back to each source pollutant pixel; --conservation-relaxation blends toward the unnormalized regularized field."
         },
     }
     def apply_deblock(arr: np.ndarray, weight_field: np.ndarray) -> np.ndarray:
@@ -1621,7 +1627,17 @@ def main(
     ) -> np.ndarray:
         regularized = apply_deblock(conservative_field, weight_field)
         transformed = apply_method_transform(regularized, weight_field, ref, input_band_array)
-        return conservative_normalize_to_source(ref, input_band_array, transformed, grid)
+        normalized = conservative_normalize_to_source(ref, input_band_array, transformed, grid)
+        relaxation = float(args.conservation_relaxation)
+        if relaxation <= 0.0:
+            return normalized
+        if relaxation >= 1.0:
+            return transformed.astype(np.float32, copy=False)
+        return np.where(
+            np.isfinite(normalized) & np.isfinite(transformed),
+            (1.0 - relaxation) * normalized + relaxation * transformed,
+            normalized,
+        ).astype(np.float32)
 
 
     if args.groundtruth_csv:
@@ -1681,7 +1697,8 @@ def main(
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
                 "seamless_strength": args.seamless_strength,
-                "conservation_normalized": True,
+                "conservation_normalized": args.conservation_relaxation <= 0.0,
+                "conservation_relaxation": args.conservation_relaxation,
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,
@@ -1734,7 +1751,8 @@ def main(
                 "seamless_baseline_sigma_m": args.seamless_baseline_sigma_m,
                 "seamless_anomaly_sigma_m": args.seamless_anomaly_sigma_m,
                 "seamless_strength": args.seamless_strength,
-                "conservation_normalized": True,
+                "conservation_normalized": args.conservation_relaxation <= 0.0,
+                "conservation_relaxation": args.conservation_relaxation,
             }),
             pollutant=args.pollutant,
             source_band=args.input_band,

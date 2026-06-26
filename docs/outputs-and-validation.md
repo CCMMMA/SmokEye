@@ -131,6 +131,14 @@ Disable final deblocking:
 --deblock-sigma-m 0
 ```
 
+Relax final coarse-to-fine conservation normalization for visualization or diagnostic products:
+
+```bash
+--conservation-relaxation 0.5
+```
+
+The default `--conservation-relaxation 0` keeps strict hard normalization. `--conservation-relaxation 1` writes the regularized field without final source-pixel rescaling, and intermediate values blend the two fields. Nonzero values intentionally relax conservation, so the `written_regularized_normalized_output` validation block should be interpreted as the documented conservation deviation of that product.
+
 For a comparison of the allocation stage without visual regularization, use `--no-seamless --deblock-sigma-m 0` in both deterministic and AI runs.
 
 ## CALPUFF Comparison Outputs
