@@ -1,0 +1,77 @@
+{
+  "dataset": "COPERNICUS/S5P/NRTI/L3_NO2",
+  "bands": [
+    "tropospheric_NO2_column_number_density",
+    "cloud_fraction"
+  ],
+  "available_bands_first_image": [
+    "NO2_column_number_density",
+    "tropospheric_NO2_column_number_density",
+    "stratospheric_NO2_column_number_density",
+    "NO2_slant_column_number_density",
+    "tropopause_pressure",
+    "absorbing_aerosol_index",
+    "cloud_fraction",
+    "sensor_altitude",
+    "sensor_azimuth_angle",
+    "sensor_zenith_angle",
+    "solar_azimuth_angle",
+    "solar_zenith_angle"
+  ],
+  "date_start": "2024-07-31",
+  "date_end_exclusive": "2024-08-01",
+  "roi_bounds_epsg4326": [
+    14.3993,
+    40.7372,
+    14.6367,
+    40.9168
+  ],
+  "source_lon": 14.518,
+  "source_lat": 40.827,
+  "scale_m": 1113.2,
+  "crs": "EPSG:4326",
+  "images_found": 4,
+  "files": [
+    {
+      "index": 0,
+      "timestamp_utc": "2024-07-31 10:56:16 UTC",
+      "system_time_start_ms": 1722423376000,
+      "product_id": "S5P_NRTI_L2__NO2____20240731T105622_20240731T110122_35228_03_020600_20240731T114340",
+      "orbit": "unknown",
+      "path": "../SmokEye/data/use_cases/UC2_SanGiuseppeVesuviano_310724/NO2/S5P_NO2_000_20240731T105616UTC_orbit-unknown.tif",
+      "size_bytes": 1486,
+      "status": "downloaded"
+    },
+    {
+      "index": 1,
+      "timestamp_utc": "2024-07-31 11:01:16 UTC",
+      "system_time_start_ms": 1722423676000,
+      "product_id": "S5P_NRTI_L2__NO2____20240731T110122_20240731T110622_35228_03_020600_20240731T114829",
+      "orbit": "unknown",
+      "path": "../SmokEye/data/use_cases/UC2_SanGiuseppeVesuviano_310724/NO2/S5P_NO2_001_20240731T110116UTC_orbit-unknown.tif",
+      "size_bytes": 4746,
+      "status": "downloaded"
+    },
+    {
+      "index": 2,
+      "timestamp_utc": "2024-07-31 12:36:17 UTC",
+      "system_time_start_ms": 1722429377000,
+      "product_id": "S5P_NRTI_L2__NO2____20240731T123622_20240731T124122_35229_03_020600_20240731T131827",
+      "orbit": "unknown",
+      "path": "../SmokEye/data/use_cases/UC2_SanGiuseppeVesuviano_310724/NO2/S5P_NO2_002_20240731T123617UTC_orbit-unknown.tif",
+      "size_bytes": 4467,
+      "status": "downloaded"
+    },
+    {
+      "index": 3,
+      "timestamp_utc": "2024-07-31 12:41:16 UTC",
+      "system_time_start_ms": 1722429676000,
+      "product_id": "S5P_NRTI_L2__NO2____20240731T124122_20240731T124622_35229_03_020600_20240731T132251",
+      "orbit": "unknown",
+      "path": "../SmokEye/data/use_cases/UC2_SanGiuseppeVesuviano_310724/NO2/S5P_NO2_003_20240731T124116UTC_orbit-unknown.tif",
+      "size_bytes": 4376,
+      "status": "downloaded"
+    }
+  ],
+  "note": "Files are downloaded from Google Earth Engine with format=GEO_TIFF. The default physical NO2 variable is tropospheric_NO2_column_number_density in mol/m^2. cloud_fraction is included as a practical screening layer. This GEE collection may not contain qa_value."
+}
