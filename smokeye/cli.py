@@ -10,6 +10,26 @@ from smokeye import ai_downscaler, comparison, diffusion_downscaler, downscaler
 from smokeye.logging_utils import configure_cli_logging
 
 
+def prepare_calpuff_main(argv: Optional[List[str]] = None) -> None:
+    configure_cli_logging()
+    parser = argparse.ArgumentParser(
+        prog="prepare_calpuff.py",
+        description="Create CALPUFF and satellite/reference GeoTIFFs on the same grid with explicit time and unit handling.",
+    )
+    comparison.add_prepare_calpuff_arguments(parser)
+    comparison.run_prepare_calpuff(parser.parse_args(argv))
+
+
+def compare_calpuff_satellite_main(argv: Optional[List[str]] = None) -> None:
+    configure_cli_logging()
+    parser = argparse.ArgumentParser(
+        prog="compare_calpuff_satellite.py",
+        description="Compare prepared CALPUFF and satellite/reference GeoTIFFs.",
+    )
+    comparison.add_compare_prepared_arguments(parser)
+    comparison.run_compare_prepared(parser.parse_args(argv))
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     configure_cli_logging()
 

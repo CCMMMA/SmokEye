@@ -9,7 +9,15 @@ from affine import Affine
 from pyproj import CRS
 
 from smokeye.calpuff_reader import CalpuffGridRecord
-from smokeye.comparison import _stats, add_compare_calpuff_arguments, aggregate_records, select_records_for_window
+from smokeye.comparison import (
+    _stats,
+    add_compare_calpuff_arguments,
+    add_compare_prepared_arguments,
+    add_prepare_calpuff_arguments,
+    aggregate_records,
+    compare_prepared_arrays,
+    select_records_for_window,
+)
 from smokeye.downscaler import (
     GeoGrid,
     GeoDATReader,
@@ -24,7 +32,7 @@ from smokeye.downscaler import (
     orient_grid_array,
     parse_calmet_stamp,
 )
-from smokeye.temporal import discover_time_from_tags, time_check_report
+from smokeye.temporal import discover_time_from_tags, overlap_seconds, parse_datetime, time_check_report
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
 
 
@@ -80,6 +88,12 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(report["background"], 2.0)
         self.assertEqual(report["calpuff_scale"], 0.001)
 
+    def test_unit_conversion_order_is_explicit(self):
+        raw = np.array([0.0, 1000.0], dtype=np.float32)
+        converted = apply_linear_conversion(raw, 0.001, 0.0)
+        model = converted + 2.0
+        self.assertTrue(np.allclose(model, [2.0, 3.0]))
+
     def test_unit_report_defaults_to_micrograms_per_cubic_meter(self):
         raw = np.ones((1, 1), dtype=np.float32)
         report = unit_report(
@@ -109,16 +123,53 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(args.satellite_unit, "ug_m3")
         self.assertEqual(args.target_unit, "ug_m3")
 
+    def test_prepare_cli_defaults_to_micrograms_per_cubic_meter(self):
+        parser = argparse.ArgumentParser()
+        add_prepare_calpuff_arguments(parser)
+        args = parser.parse_args(["--calpuff", "calpuff.con", "--geo", "GEO.DAT"])
+        self.assertEqual(args.calpuff_unit, "ug_m3")
+        self.assertEqual(args.satellite_unit, "ug_m3")
+        self.assertEqual(args.target_unit, "ug_m3")
+
+    def test_compare_prepared_cli_requires_prepared_rasters(self):
+        parser = argparse.ArgumentParser()
+        add_compare_prepared_arguments(parser)
+        args = parser.parse_args(["--model", "prepared.model.tif", "--satellite", "prepared.satellite.tif", "--out-prefix", "out/result"])
+        self.assertEqual(args.model_band, 1)
+        self.assertEqual(args.satellite_band, 1)
+
+    def test_compare_prepared_arrays_outputs_difference_ratio_and_stats(self):
+        model = np.array([[2.0, 4.0], [np.nan, 8.0]], dtype=np.float32)
+        satellite = np.array([[1.0, 0.0], [5.0, np.nan]], dtype=np.float32)
+        difference, ratio, stats = compare_prepared_arrays(model, satellite)
+        self.assertTrue(np.allclose(difference[0, 0], 1.0))
+        self.assertTrue(np.isnan(ratio[0, 1]))
+        self.assertEqual(stats["n_valid"], 2)
 
     def test_time_consistency_strict_and_warn(self):
         start = datetime(2025, 2, 25, 7)
         end = datetime(2025, 2, 25, 8)
         ok = time_check_report(start, end, start, end, "cli", policy="strict", min_fraction=0.95, allow_untimed_satellite=False)
         self.assertEqual(ok["time_consistency"], "ok")
+        self.assertEqual(ok["time_overlap_fraction_of_satellite"], 1.0)
         with self.assertRaises(ValueError):
             time_check_report(start, end, datetime(2025, 2, 25, 9), datetime(2025, 2, 25, 10), "cli", policy="strict", min_fraction=0.95, allow_untimed_satellite=False)
         warn = time_check_report(start, end, datetime(2025, 2, 25, 9), datetime(2025, 2, 25, 10), "cli", policy="warn", min_fraction=0.95, allow_untimed_satellite=False)
         self.assertEqual(warn["time_consistency"], "warning")
+
+    def test_timezone_datetime_is_normalized_to_utc_naive(self):
+        self.assertEqual(parse_datetime("2025-02-25T08:00:00+01:00"), datetime(2025, 2, 25, 7, 0, 0))
+
+    def test_overlap_seconds(self):
+        self.assertEqual(
+            overlap_seconds(
+                datetime(2025, 2, 25, 7),
+                datetime(2025, 2, 25, 8),
+                datetime(2025, 2, 25, 7, 30),
+                datetime(2025, 2, 25, 8, 30),
+            ),
+            1800.0,
+        )
 
     def test_common_geotiff_time_tags_are_discovered(self):
         start, end, source = discover_time_from_tags(

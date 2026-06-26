@@ -1,13 +1,13 @@
 # CALPUFF-To-Satellite Comparison
 
-Use `compare-calpuff` to compare CALPUFF gridded outputs with a satellite or SmokEye-downscaled pollutant GeoTIFF on a common raster grid.
+Use `prepare_calpuff.py` and `compare_calpuff_satellite.py` to compare CALPUFF gridded outputs with a satellite or SmokEye-downscaled pollutant GeoTIFF on a common raster grid.
 
 This is a comparison workflow, not a downscaling method. It is intended for cases where CALPUFF `.con`, `.dry`, or `.wet` style outputs must be spatially aligned, temporally matched, converted into the same pollutant unit, and compared pixel by pixel against a reference GeoTIFF.
 
-## Command
+## Commands
 
 ```bash
-python downscale_pollutant.py compare-calpuff \
+python prepare_calpuff.py \
   --calpuff calpuff.con \
   --geo GEO.DAT \
   --satellite final_weight_gt_deblocked.tif \
@@ -25,12 +25,18 @@ python downscale_pollutant.py compare-calpuff \
   --calpuff-scale 0.001 \
   --background 2.0 \
   --out-prefix outputs/no2_total_vs_satellite
+
+python compare_calpuff_satellite.py \
+  --model outputs/no2_total_vs_satellite.model.tif \
+  --satellite outputs/no2_total_vs_satellite.satellite.tif \
+  --preparation-report outputs/no2_total_vs_satellite.prepare.json \
+  --out-prefix outputs/no2_total_vs_satellite
 ```
 
 ## Inspecting CALPUFF records
 
 ```bash
-python downscale_pollutant.py compare-calpuff \
+python prepare_calpuff.py \
   --calpuff calpuff.con \
   --geo GEO.DAT \
   --list-records
@@ -86,18 +92,24 @@ SmokEye intentionally does not infer physical conversions between near-surface c
 
 ## Outputs
 
-For `--out-prefix outputs/no2_total_vs_satellite`, the command writes:
+For `--out-prefix outputs/no2_total_vs_satellite`, `prepare_calpuff.py` writes:
 
 ```text
 outputs/no2_total_vs_satellite.model.tif
 outputs/no2_total_vs_satellite.satellite.tif
+outputs/no2_total_vs_satellite.prepare.json
+```
+
+Then `compare_calpuff_satellite.py` writes:
+
+```text
 outputs/no2_total_vs_satellite.difference.tif
 outputs/no2_total_vs_satellite.ratio.tif
 outputs/no2_total_vs_satellite.stats.json
 outputs/no2_total_vs_satellite.stats.csv
 ```
 
-The JSON report includes the CALPUFF record selection, GEO.DAT grid metadata, reference raster metadata, time-overlap report, unit-conversion report, statistics, and scientific caveats.
+The preparation JSON includes the CALPUFF record selection, GEO.DAT grid metadata, reference raster metadata, time-overlap report, unit-conversion report, and scientific caveats. The comparison JSON includes the prepared raster paths, optional embedded preparation report, statistics, and scientific caveats.
 
 ## Interpretation caveats
 

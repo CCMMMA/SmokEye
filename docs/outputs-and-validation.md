@@ -135,20 +135,21 @@ For a comparison of the allocation stage without visual regularization, use `--n
 
 ## CALPUFF Comparison Outputs
 
-`compare-calpuff` writes six files for each `--out-prefix`:
+`prepare_calpuff.py` writes three files for each `--out-prefix`, and `compare_calpuff_satellite.py` writes the comparison products:
 
 ```text
 <prefix>.model.tif       CALPUFF values converted to target units, background-added, and aligned to the reference grid
 <prefix>.satellite.tif   reference GeoTIFF values converted to target units
+<prefix>.prepare.json    preparation provenance, time selection, and unit-conversion diagnostics
 <prefix>.difference.tif  model minus reference
 <prefix>.ratio.tif       model divided by reference, with NaN where the reference is zero or invalid
-<prefix>.stats.json      full machine-readable provenance and diagnostics
+<prefix>.stats.json      comparison provenance and diagnostics
 <prefix>.stats.csv       flat metric/value statistics table
 ```
 
 The GeoTIFF products use the reference raster grid, CRS, transform, dimensions, `float32` dtype, `NaN` nodata, and Deflate compression.
 
-The JSON report contains:
+The preparation JSON report contains:
 
 - `calpuff`: input path, species, group, level, and aggregation method.
 - `calpuff_time_selection`: selected record times, overlap weights, or closest-record delta.
@@ -156,5 +157,6 @@ The JSON report contains:
 - `satellite`: reference path and band.
 - `time_check`: satellite/reference time source, CALPUFF comparison window, overlap seconds, overlap fraction, policy, and status.
 - `unit_conversion`: raw/converted CALPUFF stats, model-after-background stats, raw/converted satellite stats, scale/offset values, target unit, and formula.
-- `statistics`: valid-pixel count, min/max/mean/std, bias, MAE, RMSE, correlation, mean ratio, and median ratio.
 - `notes`: scientific caveats that should accompany the comparison.
+
+The comparison JSON report contains prepared model/reference paths, optional embedded preparation metadata, `statistics` with valid-pixel count, min/max/mean/std, bias, MAE, RMSE, correlation, mean ratio, and median ratio, plus the scientific caveats.

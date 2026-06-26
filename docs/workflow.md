@@ -9,12 +9,14 @@ Both methods use the same conservative allocation engine after the weight field 
 
 ## Implementation Layout
 
-The single top-level script is a compatibility entry point:
+The top-level scripts are compatibility entry points:
 
 - `downscale_pollutant.py` defaults to the shared deterministic workflow.
 - `downscale_pollutant.py --method ai` calls the shared workflow with the AI weight builder.
+- `prepare_calpuff.py` prepares CALPUFF outputs as satellite-aligned rasters with explicit time and unit handling.
+- `compare_calpuff_satellite.py` compares the prepared CALPUFF and satellite/reference rasters.
 
-Unified method dispatch lives in `smokeye/cli.py`. Shared readers, allocation, station correction, validation, deblocking, and raster writers live in `smokeye/downscaler.py`. The AI-only weight strategy lives in `smokeye/ai_downscaler.py`. This keeps method differences explicit while avoiding duplicate source code.
+Unified method dispatch lives in `smokeye/cli.py`. Shared readers, allocation, station correction, validation, deblocking, and raster writers live in `smokeye/downscaler.py`. CALPUFF preparation and prepared-raster statistics live in `smokeye/comparison.py`. The AI-only weight strategy lives in `smokeye/ai_downscaler.py`. This keeps method differences explicit while avoiding duplicate source code.
 
 ## Processing Stages
 

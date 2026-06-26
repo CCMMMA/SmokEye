@@ -683,12 +683,12 @@ These statistics are not a replacement for conservation validation, but they hel
 
 ## 14. Compare CALPUFF Results With A Satellite Or Downscaled GeoTIFF
 
-Use `compare-calpuff` when CALPUFF `.con`, `.dry`, or `.wet` style gridded outputs must be compared with a satellite raster or with a SmokEye-downscaled GeoTIFF. This workflow does not downscale CALPUFF. It reads CALPUFF gridded records, uses `GEO.DAT` to place them on the model grid, aligns them to the reference GeoTIFF, applies explicit unit conversions, and writes pixel-wise comparison products.
+Use `prepare_calpuff.py` and `compare_calpuff_satellite.py` when CALPUFF `.con`, `.dry`, or `.wet` style gridded outputs must be compared with a satellite raster or with a SmokEye-downscaled GeoTIFF. This workflow does not downscale CALPUFF. The preparation step reads CALPUFF gridded records, uses `GEO.DAT` to place them on the model grid, aligns them to the reference GeoTIFF, and applies explicit unit conversions. The comparison step computes pixel-wise difference, ratio, and statistics from the prepared rasters.
 
 First inspect the CALPUFF records:
 
 ```bash
-python downscale_pollutant.py compare-calpuff \
+python prepare_calpuff.py \
   --calpuff calpuff.con \
   --geo data/geo.dat \
   --list-records
@@ -699,7 +699,7 @@ The listing reports available species, source groups, vertical levels, record ti
 Run a temporally matched comparison when the CALPUFF NO2 values are in arbitrary model units and the satellite or downscaled NO2 GeoTIFF is already in micrograms per cubic meter (`ug_m3`). In this example, `--calpuff-scale 0.001` converts the arbitrary CALPUFF values into `ug_m3`, `--calpuff-offset 0.0` applies no additive CALPUFF offset, and `--background 2.0` adds a documented `2.0 ug_m3` background after conversion. Because the satellite raster is already in `ug_m3`, its scale is `1.0` and its offset is `0.0`:
 
 ```bash
-python downscale_pollutant.py compare-calpuff \
+python prepare_calpuff.py \
   --calpuff calpuff.con \
   --geo data/geo.dat \
   --satellite output/getting_started/no_groundtruth/deterministic_no2.tif \
@@ -721,6 +721,12 @@ python downscale_pollutant.py compare-calpuff \
   --satellite-offset 0.0 \
   --background 2.0 \
   --out-prefix output/getting_started/calpuff/no2_total_vs_satellite
+
+python compare_calpuff_satellite.py \
+  --model output/getting_started/calpuff/no2_total_vs_satellite.model.tif \
+  --satellite output/getting_started/calpuff/no2_total_vs_satellite.satellite.tif \
+  --preparation-report output/getting_started/calpuff/no2_total_vs_satellite.prepare.json \
+  --out-prefix output/getting_started/calpuff/no2_total_vs_satellite
 ```
 
 The conversion order is fixed and recorded in the JSON report:
@@ -739,18 +745,24 @@ model_NO2_ug_m3 = raw_CALPUFF_arbitrary * 0.001 + 0.0 + 2.0
 satellite_NO2_ug_m3 = raw_satellite_NO2_ug_m3 * 1.0 + 0.0
 ```
 
-For the prefix above, the command writes:
+For the prefix above, the preparation command writes:
 
 ```text
 output/getting_started/calpuff/no2_total_vs_satellite.model.tif
 output/getting_started/calpuff/no2_total_vs_satellite.satellite.tif
+output/getting_started/calpuff/no2_total_vs_satellite.prepare.json
+```
+
+The comparison command writes:
+
+```text
 output/getting_started/calpuff/no2_total_vs_satellite.difference.tif
 output/getting_started/calpuff/no2_total_vs_satellite.ratio.tif
 output/getting_started/calpuff/no2_total_vs_satellite.stats.json
 output/getting_started/calpuff/no2_total_vs_satellite.stats.csv
 ```
 
-The JSON report contains CALPUFF record selection, selected timestamp rule, GEO.DAT grid metadata, reference raster metadata, time-overlap diagnostics, unit-conversion diagnostics, pixel statistics, and scientific caveats. Keep `--time-overlap-policy strict` for production comparisons; use `warn` or `ignore` only for explicitly documented diagnostics. Use `--allow-untimed-satellite` only when missing reference time metadata is an intentional assumption.
+The preparation JSON report contains CALPUFF record selection, selected timestamp rule, GEO.DAT grid metadata, reference raster metadata, time-overlap diagnostics, unit-conversion diagnostics, and scientific caveats. The comparison JSON report contains prepared raster paths, optional embedded preparation metadata, pixel statistics, and scientific caveats. Keep `--time-overlap-policy strict` for production comparisons; use `warn` or `ignore` only for explicitly documented diagnostics. Use `--allow-untimed-satellite` only when missing reference time metadata is an intentional assumption.
 
 Interpret this comparison conservatively. Spatial alignment does not make CALPUFF and satellite products physically equivalent. Temporal mismatch, vertical representativeness, chemistry, deposition-versus-concentration differences, and background assumptions can dominate the result.
 

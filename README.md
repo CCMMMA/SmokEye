@@ -12,7 +12,7 @@ Downscaling enforces timestamp consistency between the pollutant raster and weat
 
 GEO.DAT terrain/land-use arrays and CALMET gridded records can be stored south-to-north or already north-to-south depending on the producer. SmokEye defaults to the historical `lower` storage assumption and flips those arrays into raster row order. If diagnostic weight rasters look vertically mirrored, run with `--geodat-array-origin upper` and/or `--calmet-array-origin upper` after confirming the source file order.
 
-Pollutant concentrations are treated and written as micrograms per cubic meter (`ug_m3`) by default. If an input product is in another unit, convert it before downscaling or use the explicit scale/offset controls in `compare-calpuff` so the final comparison unit remains `ug_m3`.
+Pollutant concentrations are treated and written as micrograms per cubic meter (`ug_m3`) by default. If an input product is in another unit, convert it before downscaling or use the explicit scale/offset controls in `prepare_calpuff.py` so the final comparison unit remains `ug_m3`.
 
 The top-level script is a thin compatibility entry point. Shared implementation lives in the `smokeye` package so deterministic and AI workflows do not duplicate parsing, I/O, conservative allocation, station correction, validation, or raster writing code.
 
@@ -118,12 +118,12 @@ python downscale_pollutant.py --method diffusion \
 
 Diffusion inference fails with a clear error if `--diffusion-checkpoint` is omitted. This prevents deterministic output from being mislabeled as diffusion-assisted output.
 
-### Comparing CALPUFF output with satellite/downscaled pollutant GeoTIFFs
+### Preparing and comparing CALPUFF output with satellite/downscaled pollutant GeoTIFFs
 
-SmokEye can align CALPUFF gridded outputs with a satellite or downscaled pollutant GeoTIFF for pixel-wise comparison. Provide the CALPUFF binary file, the CALMET/CALPUFF `GEO.DAT` grid file, the reference GeoTIFF, the pollutant species/group, a temporally consistent comparison window, and any unit conversion needed to bring CALPUFF values into the same unit as the reference raster.
+SmokEye uses two explicit CALPUFF steps. `prepare_calpuff.py` reads CALPUFF gridded outputs, selects the requested pollutant/time window, applies documented unit conversions, and writes CALPUFF and satellite rasters on the same grid. `compare_calpuff_satellite.py` then compares those prepared rasters pixel by pixel.
 
 ```bash
-python downscale_pollutant.py compare-calpuff \
+python prepare_calpuff.py \
   --calpuff calpuff.con \
   --geo GEO.DAT \
   --satellite final_weight_gt_deblocked.tif \
@@ -144,6 +144,12 @@ python downscale_pollutant.py compare-calpuff \
   --satellite-offset 0.0 \
   --background 2.0 \
   --out-prefix outputs/no2_total_vs_satellite
+
+python compare_calpuff_satellite.py \
+  --model outputs/no2_total_vs_satellite.model.tif \
+  --satellite outputs/no2_total_vs_satellite.satellite.tif \
+  --preparation-report outputs/no2_total_vs_satellite.prepare.json \
+  --out-prefix outputs/no2_total_vs_satellite
 ```
 
 The model compared against the satellite is:
@@ -155,7 +161,7 @@ satellite = raw_satellite * satellite_scale + satellite_offset
 
 `background` is always expressed in the final target unit, `ug_m3` by default, and is added after CALPUFF unit conversion. SmokEye does not guess conversions between arbitrary CALPUFF units, near-surface concentrations, deposition fluxes, mixing ratios, and satellite column amounts; those conversions must be supplied explicitly through scale/offset and documented in the JSON report.
 
-The command writes aligned `.model.tif`, `.satellite.tif`, `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv` outputs using the supplied prefix. Use `--list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster.
+The preparation command writes aligned `.model.tif`, `.satellite.tif`, and `.prepare.json` outputs using the supplied prefix. The comparison command writes `.difference.tif`, `.ratio.tif`, `.stats.json`, and `.stats.csv`. Use `prepare_calpuff.py --list-records` to inspect available CALPUFF species/group/time records without requiring a satellite raster.
 
 By default, the comparison is time-strict. SmokEye fails unless the CALPUFF comparison window and the satellite/reference validity window overlap by at least `--min-time-overlap-fraction` of the satellite window. Use `--time-overlap-policy warn` only for documented diagnostics, and `--allow-untimed-satellite` only when the missing satellite/reference time is an explicit assumption.
 
@@ -177,6 +183,8 @@ By default, the comparison is time-strict. SmokEye fails unless the CALPUFF comp
 ```text
 SmokEye/
 ├── downscale_pollutant.py
+├── prepare_calpuff.py
+├── compare_calpuff_satellite.py
 ├── smokeye/
 │   ├── __init__.py
 │   ├── cli.py

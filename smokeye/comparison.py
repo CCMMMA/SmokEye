@@ -1,13 +1,14 @@
-"""CALPUFF-to-reference GeoTIFF comparison workflow for SmokEye.
+"""CALPUFF preparation and satellite comparison workflows for SmokEye.
 
-This module replaces the standalone ``calpuff_to_satellite_geotiff.py`` script
-with a repository-native subcommand:
+The public entry points are thin scripts:
 
-    python downscale_pollutant.py compare-calpuff ...
+    python prepare_calpuff.py ...
+    python compare_calpuff_satellite.py ...
 
-It follows the same SmokEye conventions used by the downscaling workflows:
-package-level implementation, thin CLI dispatch, explicit timestamp checks,
-explicit unit conversion, GeoTIFF outputs, and JSON/CSV diagnostics.
+``prepare_calpuff.py`` reads CALPUFF output, selects records by pollutant/time,
+converts units explicitly, and writes rasters aligned to a satellite/reference
+GeoTIFF. ``compare_calpuff_satellite.py`` performs the pixel-wise comparison on
+those prepared rasters.
 """
 
 from __future__ import annotations
@@ -49,11 +50,11 @@ SCIENTIFIC_CAVEATS = [
 ]
 
 
-def add_compare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
-    """Register the ``compare-calpuff`` CLI arguments."""
+def add_prepare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the CALPUFF preparation CLI arguments."""
     parser.add_argument("--calpuff", type=Path, required=True, help="CALPUFF .con/.dry/.wet style Fortran-unformatted output")
     parser.add_argument("--geo", type=Path, required=True, help="CALMET/CALPUFF GEO.DAT defining the CALPUFF grid")
-    parser.add_argument("--satellite", type=Path, default=None, help="Reference satellite/downscaled pollutant GeoTIFF")
+    parser.add_argument("--satellite", type=Path, default=None, help="Reference satellite/downscaled pollutant GeoTIFF used as the alignment grid")
     parser.add_argument("--satellite-band", type=int, default=1)
 
     parser.add_argument("--species", default="NO2", help="CALPUFF species label, for example NO2, SO2, PM10")
@@ -95,6 +96,21 @@ def add_compare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--array-origin", choices=["lower", "upper"], default="lower", help="CALPUFF grid-array storage order before conversion to raster rows")
     parser.add_argument("--resampling", choices=["nearest", "bilinear", "average"], default="bilinear")
     parser.add_argument("--out-prefix", type=Path, default=None)
+
+
+def add_compare_prepared_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register the prepared-raster comparison CLI arguments."""
+    parser.add_argument("--model", type=Path, required=True, help="Prepared CALPUFF model GeoTIFF, usually *.model.tif")
+    parser.add_argument("--satellite", type=Path, required=True, help="Prepared satellite/reference GeoTIFF, usually *.satellite.tif")
+    parser.add_argument("--model-band", type=int, default=1)
+    parser.add_argument("--satellite-band", type=int, default=1)
+    parser.add_argument("--preparation-report", type=Path, default=None, help="Optional *.prepare.json report to embed in comparison metadata")
+    parser.add_argument("--out-prefix", type=Path, required=True)
+
+
+def add_compare_calpuff_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register backward-compatible combined CALPUFF comparison arguments."""
+    add_prepare_calpuff_arguments(parser)
 
 
 def _filter_records(records: List[CalpuffGridRecord], species: str, group: str, level: Optional[str]) -> List[CalpuffGridRecord]:
@@ -285,7 +301,30 @@ def _out_path(prefix: Path, suffix: str) -> Path:
     return Path(str(prefix) + suffix)
 
 
-def run_compare_calpuff(args: argparse.Namespace) -> None:
+def _read_float_band(path: Path, band: int) -> tuple[np.ndarray, dict]:
+    with rasterio.open(path) as src:
+        raw = src.read(band).astype(np.float32)
+        mask = src.read_masks(band) == 0
+        if src.nodata is not None:
+            mask |= raw == src.nodata
+        arr = np.where(mask, np.nan, raw).astype(np.float32)
+        return arr, src.profile.copy()
+
+
+def compare_prepared_arrays(model_aligned: np.ndarray, sat_target: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
+    model_aligned = np.where(np.isfinite(sat_target), model_aligned, np.nan).astype(np.float32)
+    sat_target = sat_target.astype(np.float32)
+    difference = (model_aligned - sat_target).astype(np.float32)
+    ratio = np.divide(
+        model_aligned,
+        sat_target,
+        out=np.full_like(model_aligned, np.nan),
+        where=np.isfinite(sat_target) & (sat_target != 0.0),
+    ).astype(np.float32)
+    return difference, ratio, _stats(model_aligned, sat_target)
+
+
+def run_prepare_calpuff(args: argparse.Namespace) -> dict:
     configure_cli_logging()
     grid = GeoDATReader(args.geo, None, require_projection=True).read()
     records = read_calpuff_grid_records(args.calpuff, grid.nx, grid.ny, array_origin=args.array_origin)
@@ -363,20 +402,10 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
 
     model_aligned = np.where(np.isfinite(sat_target), model_aligned, np.nan).astype(np.float32)
     sat_target = sat_target.astype(np.float32)
-    difference = (model_aligned - sat_target).astype(np.float32)
-    ratio = np.divide(
-        model_aligned,
-        sat_target,
-        out=np.full_like(model_aligned, np.nan),
-        where=np.isfinite(sat_target) & (sat_target != 0.0),
-    ).astype(np.float32)
-    stats = _stats(model_aligned, sat_target)
 
     prefix = Path(args.out_prefix)
     _write_tif(_out_path(prefix, ".model.tif"), target_profile, model_aligned, "CALPUFF converted plus background aligned to reference")
     _write_tif(_out_path(prefix, ".satellite.tif"), target_profile, sat_target, "Converted satellite/reference raster")
-    _write_tif(_out_path(prefix, ".difference.tif"), target_profile, difference, "Model minus satellite/reference")
-    _write_tif(_out_path(prefix, ".ratio.tif"), target_profile, ratio, "Model divided by satellite/reference")
 
     target_unit = args.target_unit or args.satellite_unit
     report = {
@@ -406,6 +435,49 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
             satellite_offset=args.satellite_offset,
             background=args.background,
         ),
+        "notes": SCIENTIFIC_CAVEATS,
+    }
+
+    json_path = _out_path(prefix, ".prepare.json")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    logger.info(
+        json.dumps(
+            {
+                "outputs": [str(_out_path(prefix, suffix)) for suffix in (".model.tif", ".satellite.tif", ".prepare.json")],
+            },
+            indent=2,
+        )
+    )
+    return report
+
+
+def run_compare_prepared(args: argparse.Namespace) -> dict:
+    configure_cli_logging()
+    model, model_profile = _read_float_band(args.model, args.model_band)
+    satellite, satellite_profile = _read_float_band(args.satellite, args.satellite_band)
+    if model.shape != satellite.shape:
+        raise ValueError(f"Prepared raster shapes differ: model {model.shape}, satellite {satellite.shape}")
+
+    model_transform = model_profile.get("transform")
+    satellite_transform = satellite_profile.get("transform")
+    if model_profile.get("crs") != satellite_profile.get("crs") or model_transform != satellite_transform:
+        raise ValueError("Prepared rasters must have the same CRS and transform; run prepare_calpuff.py first")
+
+    difference, ratio, stats = compare_prepared_arrays(model, satellite)
+    prefix = Path(args.out_prefix)
+    _write_tif(_out_path(prefix, ".difference.tif"), satellite_profile, difference, "Model minus satellite/reference")
+    _write_tif(_out_path(prefix, ".ratio.tif"), satellite_profile, ratio, "Model divided by satellite/reference")
+
+    preparation = None
+    if args.preparation_report is not None:
+        preparation = json.loads(Path(args.preparation_report).read_text(encoding="utf-8"))
+
+    report = {
+        "model": {"path": str(args.model), "band": args.model_band},
+        "satellite": {"path": str(args.satellite), "band": args.satellite_band},
+        "preparation": preparation,
         "statistics": stats,
         "notes": SCIENTIFIC_CAVEATS,
     }
@@ -419,9 +491,24 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
     logger.info(
         json.dumps(
             {
-                "outputs": [str(_out_path(prefix, suffix)) for suffix in (".model.tif", ".satellite.tif", ".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")],
+                "outputs": [str(_out_path(prefix, suffix)) for suffix in (".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")],
                 "statistics": stats,
             },
             indent=2,
         )
     )
+    return report
+
+
+def run_compare_calpuff(args: argparse.Namespace) -> None:
+    """Backward-compatible combined prepare-and-compare workflow."""
+    run_prepare_calpuff(args)
+    prepared_args = argparse.Namespace(
+        model=_out_path(Path(args.out_prefix), ".model.tif"),
+        satellite=_out_path(Path(args.out_prefix), ".satellite.tif"),
+        model_band=1,
+        satellite_band=1,
+        preparation_report=_out_path(Path(args.out_prefix), ".prepare.json"),
+        out_prefix=args.out_prefix,
+    )
+    run_compare_prepared(prepared_args)
