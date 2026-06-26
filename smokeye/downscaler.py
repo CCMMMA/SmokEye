@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import re
 import struct
@@ -47,6 +48,10 @@ from shapely.ops import transform as shapely_transform
 from scipy.ndimage import gaussian_filter
 
 from smokeye.temporal import discover_time_from_tags, expand_instant, iso, parse_datetime, validate_window
+from smokeye.logging_utils import configure_cli_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -349,7 +354,7 @@ class MetReader:
             raise FileNotFoundError(self.path)
         except Exception as exc:
             if self.allow_no_met:
-                print(f"WARNING: meteorology ignored: {exc}")
+                logger.warning("WARNING: meteorology ignored: %s", exc)
                 return {}
             raise
 
@@ -1241,6 +1246,8 @@ def main(
     argv: Optional[List[str]] = None,
     include_method_help: bool = False,
 ) -> None:
+    configure_cli_logging()
+
     parser = argparse.ArgumentParser(
         description="Conservatively downscale a selected pollutant raster band to a CALMET GEO.DAT grid, optionally corrected with air-quality stations."
     )
@@ -1298,26 +1305,26 @@ def main(
 
     if args.inspect_geodat:
         grid = GeoDATReader(args.inspect_geodat, args.geodat_sidecar, array_origin=args.geodat_array_origin).read()
-        print(json.dumps(grid.as_dict(), indent=2))
+        logger.info(json.dumps(grid.as_dict(), indent=2))
         if grid.elevation is not None:
-            print("elevation:", json.dumps({
+            logger.info("elevation: %s", json.dumps({
                 "min": float(np.nanmin(grid.elevation)),
                 "max": float(np.nanmax(grid.elevation)),
                 "mean": float(np.nanmean(grid.elevation)),
             }, indent=2))
         if grid.landuse is not None:
             vals, cnt = np.unique(grid.landuse, return_counts=True)
-            print("landuse:", json.dumps({str(int(v)): int(c) for v, c in zip(vals, cnt)}, indent=2))
+            logger.info("landuse: %s", json.dumps({str(int(v)): int(c) for v, c in zip(vals, cnt)}, indent=2))
         return
 
     if args.inspect_calmet:
-        print(json.dumps(MetReader.inspect(args.inspect_calmet), indent=2))
+        logger.info(json.dumps(MetReader.inspect(args.inspect_calmet), indent=2))
         return
 
     if args.inspect_groundtruth:
         st = read_groundtruth_csv(args.inspect_groundtruth, args.groundtruth_value_column or args.pollutant)
         bg = estimate_background(st.value, args.background_mode, args.background_percentile)
-        print(json.dumps({"pollutant": args.pollutant, "stations": st.as_summary(), "background_value": bg}, indent=2))
+        logger.info(json.dumps({"pollutant": args.pollutant, "stations": st.as_summary(), "background_value": bg}, indent=2))
         return
 
     if getattr(args, "diffusion_train", False) and method_output_transform is not None:
@@ -1367,8 +1374,8 @@ def main(
     met = met_reader.read()
     max_calmet_delta = None if args.max_calmet_stamp_delta < 0 else args.max_calmet_stamp_delta
     enforce_met_time_consistency(met_reader.selection_report, max_calmet_delta)
-    print("Inferred target grid:", json.dumps(grid.as_dict(), indent=2))
-    print("Meteorology fields:", ", ".join(sorted(met.keys())) if met else "none")
+    logger.info("Inferred target grid: %s", json.dumps(grid.as_dict(), indent=2))
+    logger.info("Meteorology fields: %s", ", ".join(sorted(met.keys())) if met else "none")
 
     weights = weight_builder(grid, met)
     report = {
@@ -1448,8 +1455,8 @@ def main(
     if args.groundtruth_csv:
         stations = read_groundtruth_csv(args.groundtruth_csv, args.groundtruth_value_column or args.pollutant).with_xy(grid.crs)
         background = estimate_background(stations.value, args.background_mode, args.background_percentile)
-        print("Ground-truth stations:", json.dumps(stations.as_summary(), indent=2))
-        print(f"Estimated average background {args.pollutant} ({args.background_mode}): {background:.12g}")
+        logger.info("Ground-truth stations: %s", json.dumps(stations.as_summary(), indent=2))
+        logger.info("Estimated average background %s (%s): %.12g", args.pollutant, args.background_mode, background)
 
         base_field, _, _ = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
         pred_before, _, _ = sample_grid_values(base_field, grid, stations.x, stations.y)
@@ -1468,7 +1475,7 @@ def main(
         )
         if args.write_correction:
             write_weight_raster(args.write_correction, grid, correction)
-            print(f"Wrote station correction raster: {args.write_correction}")
+            logger.info("Wrote station correction raster: %s", args.write_correction)
         weights = weights * correction
         final_conservative_field, final_ref, final_input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
         pred_after_conservative, _, _ = sample_grid_values(final_conservative_field, grid, stations.x, stations.y)
@@ -1525,13 +1532,13 @@ def main(
             "station_metrics_after_correction_regularized": after_regularized,
             "station_correction": corr_info,
         })
-        print("Station metrics before correction:", json.dumps(before, indent=2))
-        print("Station metrics after correction before regularization:", json.dumps(after_conservative, indent=2))
-        print("Station metrics after correction in written regularized output:", json.dumps(after_regularized, indent=2))
+        logger.info("Station metrics before correction: %s", json.dumps(before, indent=2))
+        logger.info("Station metrics after correction before regularization: %s", json.dumps(after_conservative, indent=2))
+        logger.info("Station metrics after correction in written regularized output: %s", json.dumps(after_regularized, indent=2))
     else:
         if args.write_weight:
             write_weight_raster(args.write_weight, grid, weights)
-            print(f"Wrote weight raster: {args.write_weight}")
+            logger.info("Wrote weight raster: %s", args.write_weight)
         conservative_out, ref, input_band_array = conservative_downscale_array(args.input_tif, grid, weights, band=args.input_band)
         out = apply_method_transform(apply_deblock(conservative_out, weights), weights, ref, input_band_array)
         write_pollutant_raster(
@@ -1568,16 +1575,16 @@ def main(
 
     if args.groundtruth_csv and args.write_weight:
         write_weight_raster(args.write_weight, grid, weights)
-        print(f"Wrote final weight raster: {args.write_weight}")
+        logger.info("Wrote final weight raster: %s", args.write_weight)
 
-    print(f"Wrote output: {args.output_tif}")
+    logger.info("Wrote output: %s", args.output_tif)
     if stats is not None:
-        print("Conservation validation:", json.dumps(stats, indent=2))
+        logger.info("Conservation validation: %s", json.dumps(stats, indent=2))
         report["conservation_validation"] = stats
     if args.station_report:
         args.station_report.parent.mkdir(parents=True, exist_ok=True)
         args.station_report.write_text(json.dumps(report, indent=2))
-        print(f"Wrote station report: {args.station_report}")
+        logger.info("Wrote station report: %s", args.station_report)
 
 
 if __name__ == "__main__":

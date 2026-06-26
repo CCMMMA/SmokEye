@@ -7,9 +7,12 @@ import sys
 from typing import List, Optional
 
 from smokeye import ai_downscaler, comparison, diffusion_downscaler, downscaler
+from smokeye.logging_utils import configure_cli_logging
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    configure_cli_logging()
+
     if argv is None:
         argv = sys.argv[1:]
 

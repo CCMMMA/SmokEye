@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Tuple
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
 from smokeye import downscaler
+
+
+logger = logging.getLogger(__name__)
 
 
 def _finite_fill(arr: np.ndarray, fallback: float = 0.0) -> np.ndarray:
@@ -102,11 +106,11 @@ def build_ai_weights(
         learned = learned / median
     learned = np.clip(learned, min_weight, 20.0)
 
-    print(
-        "AI weight model:",
-        f"features={len(feature_names)}",
-        f"hidden={hidden_width}",
-        f"training_cells={int(valid.sum())}",
+    logger.info(
+        "AI weight model: features=%s hidden=%s training_cells=%s",
+        len(feature_names),
+        hidden_width,
+        int(valid.sum()),
     )
     return learned
 

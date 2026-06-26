@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -18,6 +19,10 @@ from smokeye.calpuff_reader import CalpuffGridRecord, read_calpuff_grid_records,
 from smokeye.downscaler import GeoDATReader
 from smokeye.temporal import discover_time_from_tags, expand_instant, overlap_seconds, parse_datetime, time_check_report, validate_window
 from smokeye.unit_conversion import apply_linear_conversion, unit_report
+from smokeye.logging_utils import configure_cli_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 SCIENTIFIC_CAVEATS = [
@@ -218,10 +223,12 @@ def _out_path(prefix: Path, suffix: str) -> Path:
 
 
 def run_compare_calpuff(args: argparse.Namespace) -> None:
+    configure_cli_logging()
+
     grid = GeoDATReader(args.geo, None, require_projection=True).read()
     records = read_calpuff_grid_records(args.calpuff, grid.nx, grid.ny, array_origin=args.array_origin)
     if args.list_records:
-        print(json.dumps(summarize_records(records), indent=2))
+        logger.info(json.dumps(summarize_records(records), indent=2))
         return
     if args.satellite is None:
         raise ValueError("--satellite is required unless --list-records is used")
@@ -324,4 +331,4 @@ def run_compare_calpuff(args: argparse.Namespace) -> None:
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     _write_csv(csv_path, stats)
-    print(json.dumps({"outputs": [str(Path(str(prefix) + suffix)) for suffix in (".model.tif", ".satellite.tif", ".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")], "statistics": stats}, indent=2))
+    logger.info(json.dumps({"outputs": [str(Path(str(prefix) + suffix)) for suffix in (".model.tif", ".satellite.tif", ".difference.tif", ".ratio.tif", ".stats.json", ".stats.csv")], "statistics": stats}, indent=2))
